@@ -58,21 +58,27 @@ class Node:
 
         self.sock = None
 
-    def become_follower(self, new_term):
-        if new_term > self.term:
-            self.term = new_term
-            self.state = State.FOLLOWER
-            self.voted_for = None
-            self.votes_recvd = None
-            return True
-        return False
+    async def run(self):
+        await asyncio.gather(
+            self.listen_for_messages(),
+            self.election_timer(),
+            self.send_heartbeats(),
+        )
 
-    def become_leader(self):
-        self.state = State.LEADER
-        print(f"node {self.id} became LEADER with {self.votes_recvd} votes")
+    # Background tasks
 
-    def _random_election_timeout(self):
-        return random.uniform(0.3, 0.5)
+    async def listen_for_messages(self):
+        loop = asyncio.get_running_loop()
+
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind((self.addr, self.port))
+        self.sock.setblocking(False)
+
+        self.last_heartbeat = loop.time()
+
+        while True:
+            data, addr = await loop.sock_recvfrom(self.sock, 1024)
+            await self.handle_message(data, addr)
 
     async def election_timer(self):
         """Monitors election timeout and triggers elections"""
@@ -88,32 +94,6 @@ class Node:
             if elapsed >= self.election_timeout:
                 await self.start_election()
 
-    async def broadcast_to_peers(self, message):
-        loop = asyncio.get_running_loop()
-        for peer_addr in self.peers:
-            await loop.sock_sendto(self.sock, message, peer_addr)
-
-    async def send_to(self, message, addr):
-        loop = asyncio.get_running_loop()
-        await loop.sock_sendto(self.sock, message, addr)
-
-    async def start_election(self):
-        print(f"Node {self.id}: Starting election for term {self.term + 1}")
-        self.state = State.CANDIDATE
-        self.term += 1
-        self.voted_for = self.id
-        self.votes_recvd = 1
-        self.reset_election_timer()
-
-        msg = RequestVote(
-            term=self.term,
-            candidate_id=self.id,
-            last_log_index=0,
-            last_log_term=0,
-        )
-
-        await self.broadcast_to_peers(msg.to_bytes())
-
     async def send_heartbeats(self):
         while True:
             await asyncio.sleep(0.05)
@@ -124,18 +104,7 @@ class Node:
             msg = Heartbeat(term=self.term)
             await self.broadcast_to_peers(msg.to_bytes())
 
-    async def listen_for_messages(self):
-        loop = asyncio.get_running_loop()
-
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind((self.addr, self.port))
-        self.sock.setblocking(False)
-
-        self.last_heartbeat = loop.time()
-
-        while True:
-            data, addr = await loop.sock_recvfrom(self.sock, 1024)
-            await self.handle_message(data, addr)
+    # Core logic
 
     async def handle_message(self, data, addr):
         """Process incoming message, potentially respond directly"""
@@ -177,17 +146,56 @@ class Node:
 
         self.reset_election_timer()
 
+    async def start_election(self):
+        print(f"Node {self.id}: Starting election for term {self.term + 1}")
+        self.state = State.CANDIDATE
+        self.term += 1
+        self.voted_for = self.id
+        self.votes_recvd = 1
+        self.reset_election_timer()
+
+        msg = RequestVote(
+            term=self.term,
+            candidate_id=self.id,
+            last_log_index=0,
+            last_log_term=0,
+        )
+
+        await self.broadcast_to_peers(msg.to_bytes())
+
+    # State management
+
+    def become_follower(self, new_term):
+        if new_term > self.term:
+            self.term = new_term
+            self.state = State.FOLLOWER
+            self.voted_for = None
+            self.votes_recvd = None
+            return True
+        return False
+
+    def become_leader(self):
+        self.state = State.LEADER
+        print(f"node {self.id} became LEADER with {self.votes_recvd} votes")
+
+    # Utilities
+
+    async def send_to(self, message, addr):
+        loop = asyncio.get_running_loop()
+        await loop.sock_sendto(self.sock, message, addr)
+
+    async def broadcast_to_peers(self, message):
+        loop = asyncio.get_running_loop()
+        for peer_addr in self.peers:
+            await loop.sock_sendto(self.sock, message, peer_addr)
+
     def reset_election_timer(self):
         """Called when receiving valid heartbeat or granting vote"""
         self.last_heartbeat = asyncio.get_running_loop().time()
         self.election_timeout = self._random_election_timeout()
 
-    async def run(self):
-        await asyncio.gather(
-            self.send_heartbeats(),
-            self.election_timer(),
-            self.listen_for_messages(),
-        )
+    def _random_election_timeout(self):
+        return random.uniform(0.3, 0.5)
 
 
 async def run_cluster(nodes):
