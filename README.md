@@ -32,3 +32,5 @@ node 2: recv from ('127.0.0.1', 10001): b'{"type": "heartbeat", "term": 1}'
 raft.py implements what the paper refers to as "`AppendEntries` messages" -- the core part of the algorithm that lets us replicate data across nodes in a safe, consistent manner.
 
 it include's some simple tests that starts up the node, sends in data, and confirms the replication and consistency of the log (even if a node fails).
+
+`uv run pytest tests/test_integration_basic.py -v -s`
