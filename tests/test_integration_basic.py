@@ -1,9 +1,3 @@
-"""Basic integration tests for multiprocess Raft cluster.
-
-These tests verify the fundamental behavior of the tick-based
-multiprocess Raft implementation.
-"""
-
 import pytest
 
 from tests.helpers.assertions import assert_commit_index, assert_log_replicated, assert_single_leader, wait_for_leader
@@ -39,10 +33,8 @@ def test_log_replication_3_nodes(cluster_3):
         assert success, f"Failed to append command '{cmd}'"
         print(f"[TEST] Submitted command: {cmd}")
 
-        # Give time for replication
         cluster_3.tick_cluster(n_ticks=100)
 
-    # Wait for full replication
     cluster_3.tick_cluster(n_ticks=200)
 
     assert_log_replicated(cluster_3, expected_length=3)
