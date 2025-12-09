@@ -69,8 +69,8 @@ class LogEntry(Message):
 
 
 class Node:
-    def __init__(self, addr="localhost", port=10000, id=0, peers=[], peer_ids=[]):
-        self.id, self.peers, self.peer_ids, self.addr, self.port = id, peers, peer_ids, addr, port
+    def __init__(self, addr="localhost", port=10000, id=0, peers=None, peer_ids=None):
+        self.id, self.peers, self.peer_ids, self.addr, self.port = id, peers or [], peer_ids or [], addr, port
 
         self.state, self.term = State.FOLLOWER, 0
         self.log = []
@@ -81,8 +81,8 @@ class Node:
 
         self.sock = None
 
-        self.commit_idx = 0
-        self.last_applied = 0
+        self.commit_idx = -1
+        self.last_applied = -1
 
         # state if leader - keyed by peer_id
         self.next_idx = {}
