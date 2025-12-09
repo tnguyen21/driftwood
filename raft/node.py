@@ -126,15 +126,12 @@ class TickNode:
             print(f"[Node {self.id}] Error decoding message: {e}")
             return
 
-        # Extract sender ID from message
-        from_node_id = msg.sender_id
-
         # Check partition state (if we can identify sender)
-        if from_node_id is not None and not self._should_accept_message(from_node_id):
+        if msg.sender_id is not None and not self._should_accept_message(msg.sender_id):
             return
 
-        if from_node_id is not None:
-            print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from node {from_node_id}")
+        if msg.sender_id is not None:
+            print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from node {msg.sender_id}")
         else:
             print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from {addr}")
 
@@ -154,7 +151,7 @@ class TickNode:
         self._become_follower(msg.term)
 
         vote_granted = False
-        if self.voted_for is None or self.voted_for == msg.candidate_id:
+        if self.voted_for is None or self.voted_for == msg.sender_id:
             my_last_idx = len(self.log) - 1
             my_last_term = self.log[my_last_idx].term if self.log else -1
 
@@ -162,17 +159,17 @@ class TickNode:
 
             if log_ok:
                 vote_granted = True
-                self.voted_for = msg.candidate_id
-                print(f"[Node {self.id}] [{self.state.name:9}] Granting vote to candidate {msg.candidate_id} for term {self.term}")
+                self.voted_for = msg.sender_id
+                print(f"[Node {self.id}] [{self.state.name:9}] Granting vote to candidate {msg.sender_id} for term {self.term}")
             else:
-                print(f"[Node {self.id}] [{self.state.name:9}] Denying vote to candidate {msg.candidate_id} - log not up-to-date")
+                print(f"[Node {self.id}] [{self.state.name:9}] Denying vote to candidate {msg.sender_id} - log not up-to-date")
         else:
-            print(f"[Node {self.id}] [{self.state.name:9}] Denying vote to candidate {msg.candidate_id} - already voted for {self.voted_for}")
+            print(f"[Node {self.id}] [{self.state.name:9}] Denying vote to candidate {msg.sender_id} - already voted for {self.voted_for}")
 
         if vote_granted:
             self._reset_election_timer()
 
-        response = VoteResponse(voter_id=self.id, term=self.term, vote_granted=vote_granted)
+        response = VoteResponse(sender_id=self.id, term=self.term, vote_granted=vote_granted)
         self._send_to_addr(response, addr)
 
     def _handle_vote_response(self, msg: VoteResponse, addr: tuple[str, int]):
@@ -190,7 +187,7 @@ class TickNode:
         self._reset_election_timer()
 
     def _handle_append_entries(self, msg: AppendEntries, addr: tuple[str, int]):
-        reply = AppendEntriesResponse(peer_id=self.id, term=self.term, success=False)
+        reply = AppendEntriesResponse(sender_id=self.id, term=self.term, success=False)
 
         if msg.term < self.term:
             self._send_to_addr(reply, addr)
@@ -235,14 +232,14 @@ class TickNode:
 
         # Log inconsistency - back up and retry
         if not msg.success:
-            self.next_idx[msg.peer_id] = max(0, self.next_idx[msg.peer_id] - 1)
+            self.next_idx[msg.sender_id] = max(0, self.next_idx[msg.sender_id] - 1)
             return
 
         if self.state == State.LEADER and self.term == msg.term:
             # Update replication state for this peer
-            self.match_idx[msg.peer_id] = msg.match_idx
-            self.next_idx[msg.peer_id] = msg.match_idx + 1
-            print(f"[Node {self.id}] [LEADER   ] Peer {msg.peer_id} replicated up to index {msg.match_idx}")
+            self.match_idx[msg.sender_id] = msg.match_idx
+            self.next_idx[msg.sender_id] = msg.match_idx + 1
+            print(f"[Node {self.id}] [LEADER   ] Peer {msg.sender_id} replicated up to index {msg.match_idx}")
 
             # Check if we can advance commit_idx
             old_commit = self.commit_idx
@@ -267,8 +264,8 @@ class TickNode:
         print(f"[Node {self.id}] [CANDIDATE] [tick {self.current_tick:4}] Starting election for term {self.term}")
 
         msg = RequestVote(
+            sender_id=self.id,
             term=self.term,
-            candidate_id=self.id,
             last_log_index=len(self.log) - 1,
             last_log_term=self.log[-1].term if self.log else -1,
         )
@@ -285,8 +282,8 @@ class TickNode:
             entries = self.log[peer_next_idx:]
 
             msg = AppendEntries(
+                sender_id=self.id,
                 term=self.term,
-                leader_id=self.id,
                 last_log_index=last_log_idx,
                 last_log_term=last_log_term,
                 entries=[asdict(e) for e in entries],

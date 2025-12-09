@@ -14,26 +14,12 @@ class Message:
     def to_bytes(self) -> bytes:
         return json.dumps(asdict(self)).encode("utf-8")
 
-    @property
-    def sender_id(self) -> int | None:
-        """Extract sender node ID from message fields."""
-        # Different message types use different field names for sender
-        if hasattr(self, "candidate_id"):
-            return self.candidate_id
-        elif hasattr(self, "leader_id"):
-            return self.leader_id
-        elif hasattr(self, "peer_id"):
-            return self.peer_id
-        elif hasattr(self, "voter_id"):
-            return self.voter_id
-        return None
-
 
 @dataclass
 class RequestVote(Message):
     type: str = MessageType.REQUEST_VOTE
+    sender_id: int = 0
     term: int = 0
-    candidate_id: int = 0
     last_log_index: int = 0
     last_log_term: int = 0
 
@@ -41,7 +27,7 @@ class RequestVote(Message):
 @dataclass
 class VoteResponse(Message):
     type: str = MessageType.VOTE_RESPONSE
-    voter_id: int = 0
+    sender_id: int = 0
     term: int = 0
     vote_granted: bool = False
 
@@ -49,8 +35,8 @@ class VoteResponse(Message):
 @dataclass
 class AppendEntries(Message):
     type: str = MessageType.APPEND_ENTRIES
+    sender_id: int = 0
     term: int = 0
-    leader_id: int = 0
     last_log_index: int = 0
     last_log_term: int = 0
     entries: list[Any] = field(default_factory=list)
@@ -60,7 +46,7 @@ class AppendEntries(Message):
 @dataclass
 class AppendEntriesResponse(Message):
     type: str = MessageType.APPEND_ENTRIES_RESPONSE
-    peer_id: int = 0
+    sender_id: int = 0
     term: int = 0
     success: bool = False
     match_idx: int = -1

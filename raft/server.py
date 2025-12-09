@@ -19,8 +19,8 @@ if TYPE_CHECKING:
 
 
 class ControlHandler(BaseHTTPRequestHandler):
-    def log_message(self, format, *args): 
-        pass # suppress default logging
+    def log_message(self, format, *args):
+        pass  # suppress default logging
 
     def do_POST(self):
         if self.path == "/tick":
