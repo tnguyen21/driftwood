@@ -1,0 +1,33 @@
+[project]
+name = "dinghy"
+version = "0.2.0"
+description = "Educational Raft consensus implementation with deterministic testing"
+requires-python = ">=3.14"
+dependencies = [
+    "pytest>=8.0.0",
+    "pytest-timeout>=2.2.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 144
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+timeout = 30
+addopts = "-v"
