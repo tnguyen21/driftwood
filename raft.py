@@ -15,7 +15,6 @@ class MessageType(Enum):
     VOTE_RESPONSE = "vote_response"
     APPEND_ENTRIES = "append_entries"
     APPEND_ENTRIES_RESPONSE = "append_entries_response"
-    COMMIT = "commit"
 
 
 class Message:
@@ -61,13 +60,6 @@ class AppendEntriesResponse(Message):
     term: int = 0
     success: bool = False
     match_idx: int = -1
-
-
-@dataclass
-class Commit(Message):
-    type: str = MessageType.COMMIT.value
-    log_idx: int = 0
-    term: int = 0
 
 
 @dataclass
@@ -374,11 +366,9 @@ class Node:
             self.sock = None
 
 
+# Helper methods for testing
 async def run_cluster(nodes):
     await asyncio.gather(*[n.run() for n in nodes])
-
-
-# Helper methods for testing
 
 
 def find_leader(nodes):
@@ -557,6 +547,7 @@ async def run_tests(nodes):
     print("[TEST] Shutting down cluster...")
     for node in nodes:
         node.shutdown()
+
 
 async def run_cluster_with_tests(nodes):
     await asyncio.gather(
