@@ -176,17 +176,17 @@ class Node:
     # Core logic
 
     async def handle_message(self, data, addr):
-        """Process incoming message, potentially respond directly"""
         parsed = json.loads(data.decode("utf-8"))
         msg_type = parsed.get("type")
         print(f"[Node {self.id}] [{self.state.name:9}] Received {msg_type} from {addr}")
 
         match msg_type:
             case MessageType.REQUEST_VOTE.value:
+                cand_id = parsed["candidate_id"]
                 self.become_follower(parsed["term"])
 
                 vote_granted = False
-                if self.voted_for is None or self.voted_for == parsed["candidate_id"]:
+                if self.voted_for is None or self.voted_for == cand_id:
                     my_last_idx = len(self.log) - 1
                     my_last_term = self.log[my_last_idx].term if self.log else -1
                     candidate_last_term = parsed["last_log_term"]
@@ -196,16 +196,12 @@ class Node:
 
                     if log_ok:
                         vote_granted = True
-                        self.voted_for = parsed["candidate_id"]
-                        print(
-                            f"[Node {self.id}] [{self.state.name:9}] Granting vote to candidate {parsed['candidate_id']} for term {self.term}"
-                        )
+                        self.voted_for = cand_id
+                        print(f"[Node {self.id}] [{self.state.name:9}] Granting vote to candidate {cand_id} for term {self.term}")
                     else:
-                        print(f"[Node {self.id}] [{self.state.name:9}] Denying vote to candidate {parsed['candidate_id']} - log not up-to-date")
+                        print(f"[Node {self.id}] [{self.state.name:9}] Denying vote to candidate {cand_id} - log not up-to-date")
                 else:
-                    print(
-                        f"[Node {self.id}] [{self.state.name:9}] Denying vote to candidate {parsed['candidate_id']} - already voted for {self.voted_for}"
-                    )
+                    print(f"[Node {self.id}] [{self.state.name:9}] Denying vote to candidate {cand_id} - already voted for {self.voted_for}")
 
                 msg = VoteResponse(term=self.term, vote_granted=vote_granted)
                 await self.send_to(msg.to_bytes(), addr)
