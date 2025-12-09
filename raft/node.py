@@ -21,6 +21,7 @@ from raft.messages import (
     ControlSubmitCommand,
     ControlTick,
     LogEntry,
+    MessageType,
     RequestVote,
     VoteResponse,
     decode_message,
@@ -74,9 +75,51 @@ class TickNode:
     def start_udp(self, addr: str = "localhost", port: int = 10000, peers: list[tuple[str, int]] | None = None):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((addr, port))
-        self.sock.setblocking(False)  # Non-blocking for tick-based processing
         self.peers = peers or []
         print(f"[Node {self.id}] UDP socket started on {addr}:{port}")
+
+    def run(self):
+        """Main control loop for the node.
+
+        Blocks waiting for UDP messages. Control messages trigger node actions,
+        Raft messages are processed during tick().
+        """
+        # Set socket to blocking for main loop
+        self.sock.setblocking(True)
+
+        while self.running:
+            try:
+                # Block waiting for next message
+                data, addr = self.sock.recvfrom(1024)
+
+                # Decode and check message type
+                try:
+                    msg = decode_message(data)
+                    msg_type = msg.type
+
+                    # Check if it's a control message
+                    if msg_type in (
+                        MessageType.CONTROL_TICK,
+                        MessageType.CONTROL_QUERY_STATE,
+                        MessageType.CONTROL_SUBMIT_COMMAND,
+                        MessageType.CONTROL_PARTITION,
+                        MessageType.CONTROL_SHUTDOWN,
+                    ):
+                        # Handle control message
+                        response = self.handle_control_message(data, addr)
+                        if response:
+                            self.sock.sendto(response, addr)
+                    else:
+                        # It's a Raft message - handle it directly (shouldn't happen often in main loop)
+                        self._handle_message(data, addr)
+
+                except Exception as e:
+                    print(f"[Node {self.id}] Error processing message: {e}")
+
+            except Exception as e:
+                if self.running:
+                    print(f"[Node {self.id}] Error in main loop: {e}")
+                break
 
     def tick(self):
         """Advance the node by one tick.
@@ -133,10 +176,6 @@ class TickNode:
     # Core Raft logic (synchronous versions)
 
     def handle_control_message(self, data: bytes, addr: tuple[str, int]) -> bytes | None:
-        """Handle control messages from test coordinator.
-
-        Returns response bytes if a response should be sent, None otherwise.
-        """
         try:
             msg = decode_message(data)
         except Exception as e:

@@ -16,7 +16,6 @@ import json
 import signal
 import sys
 
-from raft.messages import MessageType, decode_message
 from raft.node import TickNode
 
 
@@ -44,9 +43,6 @@ def main():
     node = TickNode(id=args.id, peer_ids=peer_ids, random_seed=args.random_seed)
     node.start_udp(addr=args.addr, port=args.udp_port, peers=peers)
 
-    # Set socket to blocking mode for control loop (tick() will temporarily set non-blocking)
-    node.sock.setblocking(True)
-
     print(f"[Node {args.id}] Started successfully")
     print(f"[Node {args.id}]   UDP: {args.addr}:{args.udp_port}")
     print(f"[Node {args.id}]   Peers: {peer_ids}")
@@ -60,41 +56,8 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # Main control loop - wait for messages
-    # Control messages trigger actions, Raft messages are handled during tick()
-    while node.running:
-        try:
-            # Block waiting for next message
-            data, addr = node.sock.recvfrom(1024)
-
-            # Try to decode and check if it's a control message
-            try:
-                msg = decode_message(data)
-                msg_type = msg.type
-
-                # Check if it's a control message
-                if msg_type in (
-                    MessageType.CONTROL_TICK,
-                    MessageType.CONTROL_QUERY_STATE,
-                    MessageType.CONTROL_SUBMIT_COMMAND,
-                    MessageType.CONTROL_PARTITION,
-                    MessageType.CONTROL_SHUTDOWN,
-                ):
-                    # Handle control message
-                    response = node.handle_control_message(data, addr)
-                    if response:
-                        node.sock.sendto(response, addr)
-                else:
-                    # It's a Raft message - handle it directly (shouldn't happen often in main loop)
-                    node._handle_message(data, addr)
-
-            except Exception as e:
-                print(f"[Node {args.id}] Error processing message: {e}")
-
-        except Exception as e:
-            if node.running:
-                print(f"[Node {args.id}] Error in main loop: {e}")
-            break
+    # Run the node's main loop (blocks until shutdown)
+    node.run()
 
     print(f"[Node {args.id}] Process exiting")
 
