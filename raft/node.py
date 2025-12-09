@@ -160,15 +160,6 @@ class TickNode:
         """Process a tick: advance counter, drain pending messages, check timeouts."""
         self.current_tick += 1
 
-        # Debug: print every 50 ticks
-        if self.current_tick % 50 == 0:
-            ticks_since_hb = self.current_tick - self.last_heartbeat_tick
-            print(
-                f"[Node {self.id}] Tick {self.current_tick}: state={self.state.name}, term={self.term}, "
-                f"ticks_since_hb={ticks_since_hb}, timeout={self.election_timeout_ticks}"
-            )
-
-        # Drain all pending Raft messages
         self._drain_raft_messages()
 
         # Check election timeout (if not leader)
