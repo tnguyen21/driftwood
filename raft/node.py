@@ -184,6 +184,12 @@ class TickNode:
                 self._handle_append_entries_response(msg, addr)
 
     def _handle_request_vote(self, msg: RequestVote, addr: tuple[str, int]):
+        # Reject stale term candidates
+        if msg.term < self.term:
+            response = VoteResponse(sender_id=self.id, term=self.term, vote_granted=False)
+            self._send_to_addr(response, addr)
+            return
+
         self._become_follower(msg.term)
 
         vote_granted = False
@@ -210,6 +216,8 @@ class TickNode:
 
     def _handle_vote_response(self, msg: VoteResponse, addr: tuple[str, int]):
         if self._become_follower(msg.term):
+            # Stepped down due to higher term; restart election timer as follower
+            self._reset_election_timer()
             return
 
         if self.state == State.CANDIDATE and msg.vote_granted:
@@ -220,7 +228,8 @@ class TickNode:
             if self.votes_recvd >= (total_nodes // 2 + 1):
                 self._become_leader()
 
-        self._reset_election_timer()
+            # Only refresh election timer when we actually make progress as candidate
+            self._reset_election_timer()
 
     def _handle_append_entries(self, msg: AppendEntries, addr: tuple[str, int]):
         reply = AppendEntriesResponse(sender_id=self.id, term=self.term, success=False)
