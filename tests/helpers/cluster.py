@@ -12,7 +12,6 @@ import time
 from typing import Any
 
 from raft.messages import (
-    ControlPartition,
     ControlQueryState,
     ControlSubmitCommand,
     ControlTick,
@@ -37,9 +36,6 @@ class MultiprocessCluster:
         self.n_nodes = n_nodes
         self.processes: dict[int, subprocess.Popen] = {}
         self.udp_ports = {i: base_udp_port + i for i in range(n_nodes)}
-
-        # Network partition state
-        self.partitioned_nodes: set[int] = set()
 
         # Control socket for sending messages to nodes
         self.control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -168,77 +164,6 @@ class MultiprocessCluster:
                 proc.kill()
                 proc.wait()
             del self.processes[node_id]
-
-    def partition_node(self, node_id: int):
-        """Isolate a node (drop all its messages).
-
-        Args:
-            node_id: ID of the node to partition
-        """
-        self.partitioned_nodes.add(node_id)
-        try:
-            partition_msg = ControlPartition(isolated=True)
-            addr = ("localhost", self.udp_ports[node_id])
-            self.control_sock.sendto(partition_msg.to_bytes(), addr)
-            print(f"[Cluster] Partitioned node {node_id}")
-        except Exception as e:
-            print(f"[Cluster] Error partitioning node {node_id}: {e}")
-
-    def partition_groups(self, group_a: list[int], group_b: list[int]):
-        """Create network partition between two groups.
-
-        Args:
-            group_a: Node IDs in first group
-            group_b: Node IDs in second group
-        """
-        # Configure group A to only accept messages from group A
-        for node_id in group_a:
-            try:
-                partition_msg = ControlPartition(allowed_peers=group_a)
-                addr = ("localhost", self.udp_ports[node_id])
-                self.control_sock.sendto(partition_msg.to_bytes(), addr)
-            except Exception as e:
-                print(f"[Cluster] Error partitioning node {node_id}: {e}")
-
-        # Configure group B to only accept messages from group B
-        for node_id in group_b:
-            try:
-                partition_msg = ControlPartition(allowed_peers=group_b)
-                addr = ("localhost", self.udp_ports[node_id])
-                self.control_sock.sendto(partition_msg.to_bytes(), addr)
-            except Exception as e:
-                print(f"[Cluster] Error partitioning node {node_id}: {e}")
-
-        print(f"[Cluster] Created partition: {group_a} | {group_b}")
-
-    def heal_partition(self, node_id: int | None = None):
-        """Restore network connectivity.
-
-        Args:
-            node_id: If specified, heal only this node. Otherwise heal all partitions.
-        """
-        if node_id is not None:
-            if node_id in self.partitioned_nodes:
-                self.partitioned_nodes.remove(node_id)
-            try:
-                heal_msg = ControlPartition(isolated=False, allowed_peers=None)
-                addr = ("localhost", self.udp_ports[node_id])
-                self.control_sock.sendto(heal_msg.to_bytes(), addr)
-                print(f"[Cluster] Healed partition for node {node_id}")
-            except Exception as e:
-                print(f"[Cluster] Error healing partition for node {node_id}: {e}")
-        else:
-            # Heal all nodes
-            heal_msg = ControlPartition(isolated=False, allowed_peers=None)
-            for i in range(self.n_nodes):
-                if i in self.processes and self.processes[i].poll() is None:
-                    try:
-                        addr = ("localhost", self.udp_ports[i])
-                        self.control_sock.sendto(heal_msg.to_bytes(), addr)
-                    except Exception:
-                        pass
-            self.partitioned_nodes.clear()
-            print("[Cluster] Healed all partitions")
 
     def append_entry(self, node_id: int, command: Any) -> bool:
         """Submit a command to a node.

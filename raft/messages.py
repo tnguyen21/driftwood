@@ -13,7 +13,6 @@ class MessageType:
     CONTROL_QUERY_STATE = "control_query_state"
     CONTROL_STATE_RESPONSE = "control_state_response"
     CONTROL_SUBMIT_COMMAND = "control_submit_command"
-    CONTROL_PARTITION = "control_partition"
     CONTROL_SHUTDOWN = "control_shutdown"
 
 
@@ -93,14 +92,6 @@ class ControlSubmitCommand(Message):
     type: str = MessageType.CONTROL_SUBMIT_COMMAND
     command: Any = None
 
-
-@dataclass
-class ControlPartition(Message):
-    type: str = MessageType.CONTROL_PARTITION
-    isolated: bool = False
-    allowed_peers: list[int] | None = None
-
-
 @dataclass
 class ControlShutdown(Message):
     type: str = MessageType.CONTROL_SHUTDOWN
@@ -115,7 +106,6 @@ MESSAGE_CLASSES = {
     MessageType.CONTROL_QUERY_STATE: ControlQueryState,
     MessageType.CONTROL_STATE_RESPONSE: ControlStateResponse,
     MessageType.CONTROL_SUBMIT_COMMAND: ControlSubmitCommand,
-    MessageType.CONTROL_PARTITION: ControlPartition,
     MessageType.CONTROL_SHUTDOWN: ControlShutdown,
 }
 

@@ -14,7 +14,6 @@ from typing import Any
 from raft.messages import (
     AppendEntries,
     AppendEntriesResponse,
-    ControlPartition,
     ControlQueryState,
     ControlShutdown,
     ControlStateResponse,
@@ -66,9 +65,6 @@ class TickNode:
         self.sock: socket.socket | None = None
         self.peers: list[tuple[str, int]] = []  # (host, port) for each peer
 
-        # Network partition simulation
-        self.partition_state = {"isolated": False, "allowed_peers": None}
-
         # Running flag
         self.running = True
 
@@ -111,7 +107,6 @@ class TickNode:
                         MessageType.CONTROL_TICK,
                         MessageType.CONTROL_QUERY_STATE,
                         MessageType.CONTROL_SUBMIT_COMMAND,
-                        MessageType.CONTROL_PARTITION,
                         MessageType.CONTROL_SHUTDOWN,
                     ):
                         self._handle_raft_message(msg, addr)
@@ -126,16 +121,13 @@ class TickNode:
         self.sock.setblocking(original_blocking)
 
     def _handle_message(self, data: bytes, addr: tuple[str, int]):
-        """Unified message handler for both control and Raft messages."""
         try:
             msg = decode_message(data)
         except Exception as e:
             print(f"[Node {self.id}] Error decoding message: {e}")
             return
 
-        # Single match statement for all message types
         match msg:
-            # Control messages
             case ControlTick():
                 self._handle_control_tick()
 
@@ -153,9 +145,6 @@ class TickNode:
 
             case ControlSubmitCommand():
                 self.append_entry(msg.command)
-
-            case ControlPartition():
-                self.set_partition(isolated=msg.isolated, allowed_peers=msg.allowed_peers)
 
             case ControlShutdown():
                 self.shutdown()
@@ -194,15 +183,7 @@ class TickNode:
                 self._send_heartbeats()
 
     def _handle_raft_message(self, msg, addr: tuple[str, int]):
-        """Handle Raft protocol messages (RequestVote, AppendEntries, etc.)."""
-        # Check partition state
-        if hasattr(msg, "sender_id") and msg.sender_id is not None:
-            if not self._should_accept_message(msg.sender_id):
-                return
-
-            print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from node {msg.sender_id}")
-        else:
-            print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from {addr}")
+        print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from {addr}")
 
         match msg:
             case RequestVote():
@@ -382,33 +363,6 @@ class TickNode:
             f"[Node {self.id}] [LEADER   ] [tick {self.current_tick:4}] "
             f"Won election with {self.votes_recvd}/{total_nodes} votes in term {self.term}"
         )
-
-    # Mocks for network and partition management
-
-    def set_partition(self, isolated: bool = False, allowed_peers: list[int] | None = None):
-        """Configure network partition for testing.
-
-        Args:
-            isolated: If True, drop all incoming messages
-            allowed_peers: If set, only accept messages from these peer IDs
-        """
-        self.partition_state = {"isolated": isolated, "allowed_peers": allowed_peers}
-        print(f"[Node {self.id}] Partition state updated: {self.partition_state}")
-
-    def _should_accept_message(self, from_peer_id: int) -> bool:
-        """Check if message should be dropped due to partition.
-
-        Args:
-            from_peer_id: ID of the peer sending the message
-
-        Returns:
-            True if message should be accepted, False if it should be dropped
-        """
-        if self.partition_state["isolated"]:
-            return False
-        if self.partition_state["allowed_peers"] is not None:
-            return from_peer_id in self.partition_state["allowed_peers"]
-        return True
 
     def _get_node_id_from_addr(self, addr: tuple[str, int]) -> int | None:
         try:
