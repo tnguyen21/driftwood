@@ -81,58 +81,94 @@ class TickNode:
     def run(self):
         """Main control loop for the node.
 
-        Blocks waiting for UDP messages. Control messages trigger node actions,
-        Raft messages are processed during tick().
+        Blocks waiting for UDP messages and dispatches them to _handle_message().
         """
-        # Set socket to blocking for main loop
         self.sock.setblocking(True)
 
         while self.running:
             try:
-                # Block waiting for next message
                 data, addr = self.sock.recvfrom(1024)
+                self._handle_message(data, addr)
+            except Exception as e:
+                if self.running:
+                    print(f"[Node {self.id}] Error in main loop: {e}")
+                break
 
-                # Decode and check message type
+    # Message handling
+
+    def _drain_raft_messages(self):
+        """Drain all pending Raft messages from the socket (non-blocking)."""
+        original_blocking = self.sock.getblocking()
+        self.sock.setblocking(False)
+
+        while True:
+            try:
+                data, addr = self.sock.recvfrom(1024)
+                # Only process Raft messages, ignore control messages during drain
                 try:
                     msg = decode_message(data)
-                    msg_type = msg.type
-
-                    # Check if it's a control message
-                    if msg_type in (
+                    if msg.type not in (
                         MessageType.CONTROL_TICK,
                         MessageType.CONTROL_QUERY_STATE,
                         MessageType.CONTROL_SUBMIT_COMMAND,
                         MessageType.CONTROL_PARTITION,
                         MessageType.CONTROL_SHUTDOWN,
                     ):
-                        # Handle control message
-                        response = self.handle_control_message(data, addr)
-                        if response:
-                            self.sock.sendto(response, addr)
-                    else:
-                        # It's a Raft message - handle it directly (shouldn't happen often in main loop)
-                        self._handle_message(data, addr)
-
-                except Exception as e:
-                    print(f"[Node {self.id}] Error processing message: {e}")
-
+                        self._handle_raft_message(msg, addr)
+                except Exception:
+                    pass
+            except BlockingIOError:
+                break
             except Exception as e:
-                if self.running:
-                    print(f"[Node {self.id}] Error in main loop: {e}")
+                print(f"[Node {self.id}] Error draining messages: {e}")
                 break
 
-    def tick(self):
-        """Advance the node by one tick.
+        self.sock.setblocking(original_blocking)
 
-        This is the main entry point for deterministic testing.
-        Each tick:
-        1. Processes any pending UDP messages (non-blocking)
-        2. Checks election timeout
-        3. Sends heartbeats if leader
-        """
-        if not self.running:
+    def _handle_message(self, data: bytes, addr: tuple[str, int]):
+        """Unified message handler for both control and Raft messages."""
+        try:
+            msg = decode_message(data)
+        except Exception as e:
+            print(f"[Node {self.id}] Error decoding message: {e}")
             return
 
+        # Single match statement for all message types
+        match msg:
+            # Control messages
+            case ControlTick():
+                self._handle_control_tick()
+
+            case ControlQueryState():
+                response = ControlStateResponse(
+                    node_id=self.id,
+                    state=self.state.name,
+                    term=self.term,
+                    current_tick=self.current_tick,
+                    commit_idx=self.commit_idx,
+                    voted_for=self.voted_for,
+                    log=[{"term": e.term, "data": e.data} for e in self.log],
+                )
+                self.sock.sendto(response.to_bytes(), addr)
+
+            case ControlSubmitCommand():
+                self.append_entry(msg.command)
+
+            case ControlPartition():
+                self.set_partition(isolated=msg.isolated, allowed_peers=msg.allowed_peers)
+
+            case ControlShutdown():
+                self.shutdown()
+
+            # Raft messages
+            case RequestVote() | VoteResponse() | AppendEntries() | AppendEntriesResponse():
+                self._handle_raft_message(msg, addr)
+
+            case _:
+                print(f"[Node {self.id}] Unknown message type: {msg.type}")
+
+    def _handle_control_tick(self):
+        """Process a tick: advance counter, drain pending messages, check timeouts."""
         self.current_tick += 1
 
         # Debug: print every 50 ticks
@@ -143,24 +179,8 @@ class TickNode:
                 f"ticks_since_hb={ticks_since_hb}, timeout={self.election_timeout_ticks}"
             )
 
-        # Temporarily set socket to non-blocking to drain message queue
-        original_blocking = self.sock.getblocking()
-        self.sock.setblocking(False)
-
-        # Process all available UDP messages (non-blocking)
-        while True:
-            try:
-                data, addr = self.sock.recvfrom(1024)
-                self._handle_message(data, addr)
-            except BlockingIOError:
-                # No more messages available
-                break
-            except Exception as e:
-                print(f"[Node {self.id}] Error receiving message: {e}")
-                break
-
-        # Restore original blocking state
-        self.sock.setblocking(original_blocking)
+        # Drain all pending Raft messages
+        self._drain_raft_messages()
 
         # Check election timeout (if not leader)
         if self.state != State.LEADER:
@@ -173,65 +193,13 @@ class TickNode:
             if self.current_tick % self.heartbeat_interval_ticks == 0:
                 self._send_heartbeats()
 
-    # Core Raft logic (synchronous versions)
+    def _handle_raft_message(self, msg, addr: tuple[str, int]):
+        """Handle Raft protocol messages (RequestVote, AppendEntries, etc.)."""
+        # Check partition state
+        if hasattr(msg, "sender_id") and msg.sender_id is not None:
+            if not self._should_accept_message(msg.sender_id):
+                return
 
-    def handle_control_message(self, data: bytes, addr: tuple[str, int]) -> bytes | None:
-        try:
-            msg = decode_message(data)
-        except Exception as e:
-            print(f"[Node {self.id}] Error decoding control message: {e}")
-            return None
-
-        match msg:
-            case ControlTick():
-                # Advance the node by one tick
-                self.tick()
-                return None
-
-            case ControlQueryState():
-                # Return current node state
-                response = ControlStateResponse(
-                    node_id=self.id,
-                    state=self.state.name,
-                    term=self.term,
-                    current_tick=self.current_tick,
-                    commit_idx=self.commit_idx,
-                    voted_for=self.voted_for,
-                    log=[{"term": e.term, "data": e.data} for e in self.log],
-                )
-                return response.to_bytes()
-
-            case ControlSubmitCommand():
-                # Append entry to log (only if leader)
-                self.append_entry(msg.command)
-                return None
-
-            case ControlPartition():
-                # Set partition state
-                self.set_partition(isolated=msg.isolated, allowed_peers=msg.allowed_peers)
-                return None
-
-            case ControlShutdown():
-                # Shutdown the node
-                self.shutdown()
-                return None
-
-            case _:
-                # Not a control message, return None
-                return None
-
-    def _handle_message(self, data: bytes, addr: tuple[str, int]):
-        try:
-            msg = decode_message(data)
-        except Exception as e:
-            print(f"[Node {self.id}] Error decoding message: {e}")
-            return
-
-        # Check partition state (if we can identify sender)
-        if msg.sender_id is not None and not self._should_accept_message(msg.sender_id):
-            return
-
-        if msg.sender_id is not None:
             print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from node {msg.sender_id}")
         else:
             print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from {addr}")
@@ -245,8 +213,6 @@ class TickNode:
                 self._handle_append_entries(msg, addr)
             case AppendEntriesResponse():
                 self._handle_append_entries_response(msg, addr)
-            case _:
-                print(f"[Node {self.id}] Unknown message type")
 
     def _handle_request_vote(self, msg: RequestVote, addr: tuple[str, int]):
         self._become_follower(msg.term)
