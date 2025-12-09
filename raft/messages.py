@@ -92,6 +92,7 @@ class ControlSubmitCommand(Message):
     type: str = MessageType.CONTROL_SUBMIT_COMMAND
     command: Any = None
 
+
 @dataclass
 class ControlShutdown(Message):
     type: str = MessageType.CONTROL_SHUTDOWN

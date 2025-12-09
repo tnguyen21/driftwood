@@ -5,6 +5,7 @@ instead of real-time timers. The node communicates with peers over UDP sockets,
 but time advancement is controlled externally via the tick() method.
 """
 
+from collections import deque
 import random
 import socket
 from dataclasses import asdict
@@ -20,7 +21,6 @@ from raft.messages import (
     ControlSubmitCommand,
     ControlTick,
     LogEntry,
-    MessageType,
     RequestVote,
     VoteResponse,
     decode_message,
@@ -77,14 +77,37 @@ class TickNode:
     def run(self):
         """Main control loop for the node.
 
-        Blocks waiting for UDP messages and dispatches them to _handle_message().
+        Blocks waiting for UDP messages, queues them, and processes in deterministic order.
         """
         self.sock.setblocking(True)
+        event_queue = deque()
 
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(1024)
-                self._handle_message(data, addr)
+                self._ingest_message(data, addr, event_queue)
+
+                # Drain any additional pending datagrams without leaving this loop
+                self.sock.setblocking(False)
+                while True:
+                    try:
+                        data, addr = self.sock.recvfrom(1024)
+                        self._ingest_message(data, addr, event_queue)
+                    except BlockingIOError:
+                        break
+                self.sock.setblocking(True)
+
+                # Process queued messages strictly in arrival order.
+                while event_queue:
+                    msg, msg_addr = event_queue.popleft()
+                    if isinstance(msg, ControlTick):
+                        self._handle_control_tick()
+                    elif isinstance(msg, (ControlQueryState, ControlSubmitCommand, ControlShutdown)):
+                        self._handle_control_message(msg, msg_addr)
+                    elif isinstance(msg, (RequestVote, VoteResponse, AppendEntries, AppendEntriesResponse)):
+                        self._handle_raft_message(msg, msg_addr)
+                    else:
+                        print(f"[Node {self.id}] Unknown message type: {getattr(msg, 'type', type(msg))}")
             except Exception as e:
                 if self.running:
                     print(f"[Node {self.id}] Error in main loop: {e}")
@@ -92,45 +115,40 @@ class TickNode:
 
     # Message handling
 
-    def _drain_raft_messages(self):
-        """Drain all pending Raft messages from the socket (non-blocking)."""
-        original_blocking = self.sock.getblocking()
-        self.sock.setblocking(False)
-
-        while True:
-            try:
-                data, addr = self.sock.recvfrom(1024)
-                # Only process Raft messages, ignore control messages during drain
-                try:
-                    msg = decode_message(data)
-                    if msg.type not in (
-                        MessageType.CONTROL_TICK,
-                        MessageType.CONTROL_QUERY_STATE,
-                        MessageType.CONTROL_SUBMIT_COMMAND,
-                        MessageType.CONTROL_SHUTDOWN,
-                    ):
-                        self._handle_raft_message(msg, addr)
-                except Exception:
-                    pass
-            except BlockingIOError:
-                break
-            except Exception as e:
-                print(f"[Node {self.id}] Error draining messages: {e}")
-                break
-
-        self.sock.setblocking(original_blocking)
-
-    def _handle_message(self, data: bytes, addr: tuple[str, int]):
+    def _ingest_message(self, data: bytes, addr: tuple[str, int], event_queue):
+        """Decode and enqueue a message preserving arrival order."""
         try:
             msg = decode_message(data)
         except Exception as e:
             print(f"[Node {self.id}] Error decoding message: {e}")
             return
+        event_queue.append((msg, addr))
 
+    def _handle_control_tick(self):
+        """Process a tick: advance counter and check timeouts/heartbeats."""
+        self.current_tick += 1
+
+        # Debug: print every 50 ticks
+        if self.current_tick % 50 == 0:
+            ticks_since_hb = self.current_tick - self.last_heartbeat_tick
+            print(
+                f"[Node {self.id}] Tick {self.current_tick}: state={self.state.name}, term={self.term}, "
+                f"ticks_since_hb={ticks_since_hb}, timeout={self.election_timeout_ticks}"
+            )
+
+        # Check election timeout (if not leader)
+        if self.state != State.LEADER:
+            ticks_since_heartbeat = self.current_tick - self.last_heartbeat_tick
+            if ticks_since_heartbeat >= self.election_timeout_ticks:
+                self._start_election()
+
+        # Send heartbeats (if leader)
+        if self.state == State.LEADER:
+            if self.current_tick % self.heartbeat_interval_ticks == 0:
+                self._send_heartbeats()
+
+    def _handle_control_message(self, msg, addr: tuple[str, int]):
         match msg:
-            case ControlTick():
-                self._handle_control_tick()
-
             case ControlQueryState():
                 response = ControlStateResponse(
                     node_id=self.id,
@@ -149,29 +167,8 @@ class TickNode:
             case ControlShutdown():
                 self.shutdown()
 
-            # Raft messages
-            case RequestVote() | VoteResponse() | AppendEntries() | AppendEntriesResponse():
-                self._handle_raft_message(msg, addr)
-
             case _:
-                print(f"[Node {self.id}] Unknown message type: {msg.type}")
-
-    def _handle_control_tick(self):
-        """Process a tick: advance counter, drain pending messages, check timeouts."""
-        self.current_tick += 1
-
-        self._drain_raft_messages()
-
-        # Check election timeout (if not leader)
-        if self.state != State.LEADER:
-            ticks_since_heartbeat = self.current_tick - self.last_heartbeat_tick
-            if ticks_since_heartbeat >= self.election_timeout_ticks:
-                self._start_election()
-
-        # Send heartbeats (if leader)
-        if self.state == State.LEADER:
-            if self.current_tick % self.heartbeat_interval_ticks == 0:
-                self._send_heartbeats()
+                print(f"[Node {self.id}] Unknown control message type: {msg}")
 
     def _handle_raft_message(self, msg, addr: tuple[str, int]):
         print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from {addr}")
