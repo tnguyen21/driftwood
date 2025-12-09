@@ -73,7 +73,8 @@ class MultiprocessCluster:
         if random_seed is not None:
             cmd.extend(["--random-seed", str(random_seed)])
 
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        # Don't capture output so we can see debug prints
+        proc = subprocess.Popen(cmd)
         self.processes[node_id] = proc
         print(f"[Cluster] Started node {node_id} (PID: {proc.pid})")
 

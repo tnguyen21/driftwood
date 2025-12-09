@@ -118,6 +118,11 @@ class TickNode:
 
         self.current_tick += 1
 
+        # Debug: print every 50 ticks
+        if self.current_tick % 50 == 0:
+            ticks_since_hb = self.current_tick - self.last_heartbeat_tick
+            print(f"[Node {self.id}] Tick {self.current_tick}: state={self.state.name}, term={self.term}, ticks_since_hb={ticks_since_hb}, timeout={self.election_timeout_ticks}")
+
         # Process all available UDP messages (non-blocking)
         while True:
             try:
@@ -156,17 +161,24 @@ class TickNode:
             print(f"[Node {self.id}] Error decoding message: {e}")
             return
 
-        # Find sender node ID from address
-        from_node_id = self._get_node_id_from_addr(addr)
-        if from_node_id is None:
-            print(f"[Node {self.id}] Received message from unknown address: {addr}")
+        # Extract sender ID from the message itself (not from address)
+        # Different message types have sender info in different fields
+        from_node_id = None
+        if hasattr(msg, 'candidate_id'):
+            from_node_id = msg.candidate_id
+        elif hasattr(msg, 'leader_id'):
+            from_node_id = msg.leader_id
+        elif hasattr(msg, 'peer_id'):
+            from_node_id = msg.peer_id
+
+        # Check partition state (if we can identify sender)
+        if from_node_id is not None and not self._should_accept_message(from_node_id):
             return
 
-        # Check partition state
-        if not self._should_accept_message(from_node_id):
-            return
-
-        print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from node {from_node_id}")
+        if from_node_id is not None:
+            print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from node {from_node_id}")
+        else:
+            print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from {addr}")
 
         match msg:
             case RequestVote():
