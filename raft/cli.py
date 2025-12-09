@@ -23,7 +23,6 @@ from raft.server import ControlServer
 
 
 def main():
-    """Main entry point for node process."""
     parser = argparse.ArgumentParser(description="Run a tick-based Raft node")
 
     parser.add_argument("--id", type=int, required=True, help="Node ID (unique integer)")
@@ -37,7 +36,6 @@ def main():
 
     args = parser.parse_args()
 
-    # Parse JSON arguments
     try:
         peers = json.loads(args.peers)
         peer_ids = json.loads(args.peer_ids)
@@ -45,16 +43,12 @@ def main():
         print(f"Error parsing JSON arguments: {e}")
         sys.exit(1)
 
-    # Convert peers to tuples
     peers = [tuple(peer) for peer in peers]
 
-    # Create node
     node = TickNode(id=args.id, peer_ids=peer_ids, random_seed=args.random_seed)
 
-    # Start UDP socket
     node.start_udp(addr=args.addr, port=args.udp_port, peers=peers)
 
-    # Start HTTP control server in background thread
     server = ControlServer(node, host=args.http_addr, port=args.http_port)
     _ = server.run_in_thread()  # Start in background, we don't need the thread reference
 

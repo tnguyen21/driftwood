@@ -138,11 +138,6 @@ class ControlServer(HTTPServer):
         print(f"[Node {node.id}] HTTP control server started on {host}:{port}")
 
     def run_in_thread(self):
-        """Start server in a background thread.
-
-        Returns:
-            Thread object running the server
-        """
         thread = threading.Thread(target=self.serve_forever, daemon=True)
         thread.start()
         return thread

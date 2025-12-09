@@ -22,8 +22,6 @@ from raft.messages import (
 
 
 class State(Enum):
-    """Raft node state."""
-
     FOLLOWER = 1
     CANDIDATE = 2
     LEADER = 3
@@ -56,7 +54,6 @@ class TickNode:
         self.id = id
         self.peer_ids = peer_ids or []
 
-        # Random generator for deterministic testing (must be initialized first)
         self._random = random.Random(random_seed)
 
         # Raft state
@@ -193,7 +190,6 @@ class TickNode:
                 print(f"[Node {self.id}] Unknown message type")
 
     def _handle_request_vote(self, msg: RequestVote, addr: tuple[str, int]):
-        """Handle RequestVote message."""
         self._become_follower(msg.term)
 
         vote_granted = False
@@ -219,7 +215,6 @@ class TickNode:
         self._send_to_addr(response, addr)
 
     def _handle_vote_response(self, msg: VoteResponse, addr: tuple[str, int]):
-        """Handle VoteResponse message."""
         if self._become_follower(msg.term):
             return
 
@@ -234,7 +229,6 @@ class TickNode:
         self._reset_election_timer()
 
     def _handle_append_entries(self, msg: AppendEntries, addr: tuple[str, int]):
-        """Handle AppendEntries message."""
         reply = AppendEntriesResponse(peer_id=self.id, term=self.term, success=False)
 
         if msg.term < self.term:
@@ -275,7 +269,6 @@ class TickNode:
         self._send_to_addr(reply, addr)
 
     def _handle_append_entries_response(self, msg: AppendEntriesResponse, addr: tuple[str, int]):
-        """Handle AppendEntriesResponse message."""
         if msg.term >= self.term:
             self._become_follower(msg.term)
 
@@ -305,7 +298,6 @@ class TickNode:
                 print(f"[Node {self.id}] [LEADER   ] Advanced commit_idx from {old_commit} to {self.commit_idx}")
 
     def _start_election(self):
-        """Start a new election."""
         self.state = State.CANDIDATE
         self.term += 1
         self.voted_for = self.id
@@ -323,7 +315,6 @@ class TickNode:
         self._broadcast(msg)
 
     def _send_heartbeats(self):
-        """Send heartbeats/log entries to all peers."""
         for i, peer_id in enumerate(self.peer_ids):
             peer_next_idx = self.next_idx[peer_id]
             last_log_idx = peer_next_idx - 1
@@ -346,14 +337,6 @@ class TickNode:
     # State transitions
 
     def _become_follower(self, new_term: int) -> bool:
-        """Transition to follower state if term is higher.
-
-        Args:
-            new_term: New term number
-
-        Returns:
-            True if state changed, False otherwise
-        """
         if new_term > self.term:
             old_state = self.state
             self.term = new_term
@@ -366,7 +349,6 @@ class TickNode:
         return False
 
     def _become_leader(self):
-        """Transition to leader state."""
         self.state = State.LEADER
         self.next_idx = {peer_id: len(self.log) for peer_id in self.peer_ids}
         self.match_idx = {peer_id: -1 for peer_id in self.peer_ids}
@@ -402,14 +384,6 @@ class TickNode:
         return True
 
     def _get_node_id_from_addr(self, addr: tuple[str, int]) -> int | None:
-        """Get node ID from address.
-
-        Args:
-            addr: (host, port) tuple
-
-        Returns:
-            Node ID if found, None otherwise
-        """
         try:
             idx = self.peers.index(addr)
             return self.peer_ids[idx]
@@ -417,12 +391,6 @@ class TickNode:
             return None
 
     def _send_to_addr(self, msg, addr: tuple[str, int]):
-        """Send message to specific address.
-
-        Args:
-            msg: Message to send
-            addr: Destination address (host, port)
-        """
         if not self.running or not self.sock:
             return
         try:
@@ -431,48 +399,23 @@ class TickNode:
             print(f"[Node {self.id}] Error sending to {addr}: {e}")
 
     def _send_to_peer(self, msg, peer_idx: int):
-        """Send message to peer by index.
-
-        Args:
-            msg: Message to send
-            peer_idx: Index into self.peers list
-        """
         if peer_idx < len(self.peers):
             self._send_to_addr(msg, self.peers[peer_idx])
 
     def _broadcast(self, msg):
-        """Broadcast message to all peers.
-
-        Args:
-            msg: Message to send
-        """
         for i in range(len(self.peers)):
             self._send_to_peer(msg, i)
 
     # Utilities
 
     def _reset_election_timer(self):
-        """Reset the election timeout."""
         self.last_heartbeat_tick = self.current_tick
         self.election_timeout_ticks = self._random_election_timeout_ticks()
 
     def _random_election_timeout_ticks(self) -> int:
-        """Generate a random election timeout in ticks.
-
-        Returns:
-            Random timeout between 150 and 300 ticks
-        """
         return self._random.randint(150, 300)
 
     def append_entry(self, data: Any) -> bool:
-        """Append a new entry to the log (only valid for leader).
-
-        Args:
-            data: Command data to append
-
-        Returns:
-            True if successful (node is leader), False otherwise
-        """
         if self.state != State.LEADER:
             return False
 
@@ -482,7 +425,6 @@ class TickNode:
         return True
 
     def shutdown(self):
-        """Shutdown the node and close socket."""
         print(f"[Node {self.id}] Shutting down...")
         self.running = False
         if self.sock:

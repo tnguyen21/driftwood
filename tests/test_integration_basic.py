@@ -10,40 +10,29 @@ from tests.helpers.assertions import assert_commit_index, assert_log_replicated,
 
 
 def test_leader_election_3_nodes(cluster_3):
-    """Test basic leader election across processes."""
-    # Wait for a leader to be elected
     leader_id = wait_for_leader(cluster_3, timeout_ticks=500)
     assert leader_id is not None, "No leader elected within timeout"
 
-    # Verify exactly one leader exists
     assert_single_leader(cluster_3)
 
-    # Print cluster state for debugging
     cluster_3.print_cluster_state()
 
 
 def test_leader_election_5_nodes(cluster_5):
-    """Test leader election with larger cluster."""
-    # Wait for a leader to be elected
     leader_id = wait_for_leader(cluster_5, timeout_ticks=500)
     assert leader_id is not None, "No leader elected within timeout"
 
-    # Verify exactly one leader exists
     assert_single_leader(cluster_5)
 
-    # Print cluster state for debugging
     cluster_5.print_cluster_state()
 
 
 def test_log_replication_3_nodes(cluster_3):
-    """Test basic log replication across processes."""
-    # Wait for leader election
     leader_id = wait_for_leader(cluster_3, timeout_ticks=500)
     assert leader_id is not None, "No leader elected"
 
     print(f"\n[TEST] Leader elected: node {leader_id}")
 
-    # Submit commands to leader
     commands = ["cmd1", "cmd2", "cmd3"]
     for cmd in commands:
         success = cluster_3.append_entry(leader_id, cmd)
@@ -56,17 +45,13 @@ def test_log_replication_3_nodes(cluster_3):
     # Wait for full replication
     cluster_3.tick_cluster(n_ticks=200)
 
-    # Verify all nodes replicated the log
     assert_log_replicated(cluster_3, expected_length=3)
     assert_commit_index(cluster_3, min_commit_idx=2)
 
-    # Print final state
     cluster_3.print_cluster_state()
 
 
 def test_sequential_commands(cluster_3):
-    """Test rapid sequential command submission."""
-    # Wait for leader
     leader_id = wait_for_leader(cluster_3, timeout_ticks=500)
     assert leader_id is not None, "No leader elected"
 
@@ -75,10 +60,8 @@ def test_sequential_commands(cluster_3):
         success = cluster_3.append_entry(leader_id, f"rapid_{i}")
         assert success, f"Failed to append command rapid_{i}"
 
-    # Give time for replication
     cluster_3.tick_cluster(n_ticks=300)
 
-    # Verify replication
     assert_log_replicated(cluster_3, expected_length=5)
     assert_commit_index(cluster_3, min_commit_idx=4)
 
@@ -88,20 +71,15 @@ def test_sequential_commands(cluster_3):
 @pytest.mark.timeout(30)
 def test_cluster_health(cluster_3):
     """Test that cluster remains healthy over extended period."""
-    # Wait for leader
     leader_id = wait_for_leader(cluster_3, timeout_ticks=500)
     assert leader_id is not None
 
-    # Submit a command
     cluster_3.append_entry(leader_id, "health_check")
 
-    # Run cluster for extended period
     cluster_3.tick_cluster(n_ticks=1000)
 
-    # Verify still only one leader
     assert_single_leader(cluster_3)
 
-    # Verify log replicated
     assert_log_replicated(cluster_3, expected_length=1)
 
     cluster_3.print_cluster_state()
