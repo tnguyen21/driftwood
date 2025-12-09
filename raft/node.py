@@ -79,50 +79,39 @@ class TickNode:
 
         Blocks waiting for UDP messages, queues them, and processes in deterministic order.
         """
+        # sleep until we get one message (why we set blocking true here)
         self.sock.setblocking(True)
         event_queue = deque()
 
         while self.running:
-            try:
-                data, addr = self.sock.recvfrom(1024)
-                self._ingest_message(data, addr, event_queue)
-
-                # Drain any additional pending datagrams without leaving this loop
-                self.sock.setblocking(False)
-                while True:
-                    try:
-                        data, addr = self.sock.recvfrom(1024)
-                        self._ingest_message(data, addr, event_queue)
-                    except BlockingIOError:
-                        break
-                self.sock.setblocking(True)
-
-                # Process queued messages strictly in arrival order.
-                while event_queue:
-                    msg, msg_addr = event_queue.popleft()
-                    if isinstance(msg, ControlTick):
-                        self._handle_control_tick()
-                    elif isinstance(msg, (ControlQueryState, ControlSubmitCommand, ControlShutdown)):
-                        self._handle_control_message(msg, msg_addr)
-                    elif isinstance(msg, (RequestVote, VoteResponse, AppendEntries, AppendEntriesResponse)):
-                        self._handle_raft_message(msg, msg_addr)
-                    else:
-                        print(f"[Node {self.id}] Unknown message type: {getattr(msg, 'type', type(msg))}")
-            except Exception as e:
-                if self.running:
-                    print(f"[Node {self.id}] Error in main loop: {e}")
-                break
-
-    # Message handling
-
-    def _ingest_message(self, data: bytes, addr: tuple[str, int], event_queue):
-        """Decode and enqueue a message preserving arrival order."""
-        try:
+            data, addr = self.sock.recvfrom(1024)
             msg = decode_message(data)
-        except Exception as e:
-            print(f"[Node {self.id}] Error decoding message: {e}")
-            return
-        event_queue.append((msg, addr))
+            event_queue.append((msg, addr))
+
+            # read all pending datagrams in kernel's buffer
+            self.sock.setblocking(False)
+            while True:
+                try:
+                    data, addr = self.sock.recvfrom(1024)
+                    msg = decode_message(data)
+                    event_queue.append((msg, addr))
+                except BlockingIOError:
+                    break
+
+            # allow CPU to go back to sleep until we receive another message
+            self.sock.setblocking(True)
+
+            # Process queued messages strictly in arrival order.
+            while event_queue:
+                msg, msg_addr = event_queue.popleft()
+                if isinstance(msg, ControlTick):
+                    self._handle_control_tick()
+                elif isinstance(msg, (ControlQueryState, ControlSubmitCommand, ControlShutdown)):
+                    self._handle_control_message(msg, msg_addr)
+                elif isinstance(msg, (RequestVote, VoteResponse, AppendEntries, AppendEntriesResponse)):
+                    self._handle_raft_message(msg, msg_addr)
+                else:
+                    print(f"[Node {self.id}] Unknown message type: {getattr(msg, 'type', type(msg))}")
 
     def _handle_control_tick(self):
         """Process a tick: advance counter and check timeouts/heartbeats."""
