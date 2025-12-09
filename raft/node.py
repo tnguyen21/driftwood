@@ -28,29 +28,7 @@ class State(Enum):
 
 
 class TickNode:
-    """Tick-based Raft node for deterministic testing with real UDP communication.
-
-    Instead of async timers, this implementation uses tick() to advance state.
-    This makes testing completely deterministic while still using real UDP sockets
-    for communication between processes.
-
-    The tick() method is synchronous and processes:
-    1. Incoming UDP messages (non-blocking)
-    2. Election timeout checks
-    3. Leader heartbeats
-
-    Time is measured in ticks instead of seconds, providing full control over
-    timing progression for tests.
-    """
-
     def __init__(self, id: int = 0, peer_ids: list[int] | None = None, random_seed: int | None = None):
-        """Initialize a tick-based Raft node.
-
-        Args:
-            id: Unique node identifier
-            peer_ids: List of peer node IDs
-            random_seed: Optional seed for deterministic random timeouts
-        """
         self.id = id
         self.peer_ids = peer_ids or []
 
@@ -63,7 +41,7 @@ class TickNode:
         self.voted_for: int | None = None
         self.votes_recvd: int | None = None
 
-        # Tick-based timing (instead of timestamps)
+        # Tick-based timing
         self.current_tick = 0
         self.last_heartbeat_tick = 0
         self.election_timeout_ticks = self._random_election_timeout_ticks()
@@ -88,13 +66,6 @@ class TickNode:
         self.running = True
 
     def start_udp(self, addr: str = "localhost", port: int = 10000, peers: list[tuple[str, int]] | None = None):
-        """Start UDP socket for communication.
-
-        Args:
-            addr: Address to bind to
-            port: Port to bind to
-            peers: List of (host, port) tuples for peer nodes
-        """
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((addr, port))
         self.sock.setblocking(False)  # Non-blocking for tick-based processing
@@ -146,12 +117,6 @@ class TickNode:
     # Core Raft logic (synchronous versions)
 
     def _handle_message(self, data: bytes, addr: tuple[str, int]):
-        """Handle an incoming message (synchronous).
-
-        Args:
-            data: Raw message bytes
-            addr: Sender address (host, port)
-        """
         try:
             msg = decode_message(data)
         except Exception as e:
