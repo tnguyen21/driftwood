@@ -189,39 +189,53 @@ class Node:
     async def handle_request_vote(self, msg, addr):
         self.become_follower(msg.term)
 
-        vote_granted = False
-        if self.voted_for is None or self.voted_for == msg.candidate_id:
-            my_last_idx = len(self.log) - 1
-            my_last_term = self.log[my_last_idx].term if self.log else -1
-
-            log_ok = msg.last_log_term > my_last_term or (msg.last_log_term == my_last_term and msg.last_log_index >= my_last_idx)
-
-            if log_ok:
-                vote_granted = True
-                self.voted_for = msg.candidate_id
-                print(f"[Node {self.id}] [{self.state.name:9}] Granting vote to candidate {msg.candidate_id} for term {self.term}")
-            else:
-                print(f"[Node {self.id}] [{self.state.name:9}] Denying vote to candidate {msg.candidate_id} - log not up-to-date")
-        else:
+        # already voted for someone else
+        if self.voted_for is not None and self.voted_for != msg.candidate_id:
             print(f"[Node {self.id}] [{self.state.name:9}] Denying vote to candidate {msg.candidate_id} - already voted for {self.voted_for}")
+            response = VoteResponse(term=self.term, vote_granted=False)
+            await self.send_to(response.to_bytes(), addr)
+            return
 
-        response = VoteResponse(term=self.term, vote_granted=vote_granted)
+        # log not up-to-date
+        my_last_idx = len(self.log) - 1
+        my_last_term = self.log[my_last_idx].term if self.log else -1
+        log_ok = msg.last_log_term > my_last_term or (msg.last_log_term == my_last_term and msg.last_log_index >= my_last_idx)
+
+        if not log_ok:
+            print(f"[Node {self.id}] [{self.state.name:9}] Denying vote to candidate {msg.candidate_id} - log not up-to-date")
+            response = VoteResponse(term=self.term, vote_granted=False)
+            await self.send_to(response.to_bytes(), addr)
+            return
+
+        # happy path: grant vote
+        self.voted_for = msg.candidate_id
+        print(f"[Node {self.id}] [{self.state.name:9}] Granting vote to candidate {msg.candidate_id} for term {self.term}")
+        response = VoteResponse(term=self.term, vote_granted=True)
         await self.send_to(response.to_bytes(), addr)
 
     async def handle_vote_response(self, msg, addr):
         if self.become_follower(msg.term):
             return
 
-        if self.state == State.CANDIDATE and msg.vote_granted:
-            self.votes_recvd += 1
-            total_nodes = len(self.peers) + 1
-            print(f"[Node {self.id}] [CANDIDATE] Received vote ({self.votes_recvd}/{total_nodes})")
+        # not a candidate or vote denied
+        if self.state != State.CANDIDATE:
+            return
 
-            if self.votes_recvd >= (total_nodes // 2 + 1):
-                self.state = State.LEADER
-                self.next_idx = {peer_id: len(self.log) for peer_id in self.peer_ids}
-                self.match_idx = {peer_id: -1 for peer_id in self.peer_ids}
-                print(f"[Node {self.id}] [LEADER   ] 🎉 WON ELECTION with {self.votes_recvd}/{total_nodes} votes in term {self.term}")
+        if not msg.vote_granted:
+            return
+
+        # Handle granted vote
+        self.votes_recvd += 1
+        total_nodes = len(self.peers) + 1
+        print(f"[Node {self.id}] [CANDIDATE] Received vote ({self.votes_recvd}/{total_nodes})")
+
+        if self.votes_recvd >= (total_nodes // 2 + 1):
+            self.state = State.LEADER
+            self.next_idx = {peer_id: len(self.log) for peer_id in self.peer_ids}
+            self.match_idx = {peer_id: -1 for peer_id in self.peer_ids}
+            self.votes_recvd = None
+            self.voted_for = None
+            print(f"[Node {self.id}] [LEADER   ] 🎉 WON ELECTION with {self.votes_recvd}/{total_nodes} votes in term {self.term}")
 
         self.reset_election_timer()
 
@@ -232,67 +246,75 @@ class Node:
             await self.send_to(reply.to_bytes(), addr)
             return
 
-        if msg.term >= self.term:
-            self.become_follower(msg.term)
+        self.become_follower(msg.term)
 
-        if msg.last_log_index == -1 or (msg.last_log_index < len(self.log) and self.log[msg.last_log_index].term == msg.last_log_term):
-            reply.success = True
+        log_consistent = msg.last_log_index == -1 or (
+            msg.last_log_index < len(self.log) and self.log[msg.last_log_index].term == msg.last_log_term
+        )
+        if not log_consistent:
+            await self.send_to(reply.to_bytes(), addr)
+            return
 
-            log_insert_idx = msg.last_log_index + 1
-            new_entries_idx = 0
-            entries = [LogEntry(**e) for e in msg.entries]
+        # happy path: append entries
+        reply.success = True
 
-            while log_insert_idx < len(self.log) and new_entries_idx < len(entries):
-                if self.log[log_insert_idx].term != entries[new_entries_idx].term:
-                    break
-                log_insert_idx += 1
-                new_entries_idx += 1
+        log_insert_idx = msg.last_log_index + 1
+        new_entries_idx = 0
+        entries = [LogEntry(**e) for e in msg.entries]
 
-            # Truncate conflicting entries and append new ones
-            if new_entries_idx < len(entries):
-                self.log = self.log[:log_insert_idx] + entries[new_entries_idx:]
-                print(f"[Node {self.id}] [{self.state.name:9}] Appended {len(entries[new_entries_idx:])} entries at index {log_insert_idx}")
+        while log_insert_idx < len(self.log) and new_entries_idx < len(entries):
+            if self.log[log_insert_idx].term != entries[new_entries_idx].term:
+                break
+            log_insert_idx += 1
+            new_entries_idx += 1
 
-            # Set match_idx after appending entries
-            reply.match_idx = msg.last_log_index + len(entries)
+        # Truncate conflicting entries and append new ones
+        if new_entries_idx < len(entries):
+            self.log = self.log[:log_insert_idx] + entries[new_entries_idx:]
+            print(f"[Node {self.id}] [{self.state.name:9}] Appended {len(entries[new_entries_idx:])} entries at index {log_insert_idx}")
 
-            if msg.leader_commit > self.commit_idx:
-                old_commit = self.commit_idx
-                self.commit_idx = min(msg.leader_commit, len(self.log) - 1)
-                print(f"[Node {self.id}] [{self.state.name:9}] Advanced commit_idx from {old_commit} to {self.commit_idx}")
+        # Set match_idx after appending entries
+        reply.match_idx = msg.last_log_index + len(entries)
 
-            self.reset_election_timer()
+        if msg.leader_commit > self.commit_idx:
+            old_commit = self.commit_idx
+            self.commit_idx = min(msg.leader_commit, len(self.log) - 1)
+            print(f"[Node {self.id}] [{self.state.name:9}] Advanced commit_idx from {old_commit} to {self.commit_idx}")
 
+        self.reset_election_timer()
         await self.send_to(reply.to_bytes(), addr)
 
     async def handle_append_entries_response(self, msg, addr):
         if msg.term >= self.term:
             self.become_follower(msg.term)
 
-        # Log inconsistency - back up and retry
+        # not leader or stale term
+        if self.state != State.LEADER or self.term != msg.term:
+            return
+
+        # log inconsistency - back up and retry
         if not msg.success:
             self.next_idx[msg.peer_id] = max(0, self.next_idx[msg.peer_id] - 1)
             return
 
-        if self.state == State.LEADER and self.term == msg.term:
-            # Update replication state for this peer
-            self.match_idx[msg.peer_id] = msg.match_idx
-            self.next_idx[msg.peer_id] = msg.match_idx + 1
-            print(f"[Node {self.id}] [LEADER   ] Peer {msg.peer_id} replicated up to index {msg.match_idx}")
+        # Update replication state for this peer
+        self.match_idx[msg.peer_id] = msg.match_idx
+        self.next_idx[msg.peer_id] = msg.match_idx + 1
+        print(f"[Node {self.id}] [LEADER   ] Peer {msg.peer_id} replicated up to index {msg.match_idx}")
 
-            # Now check if we can advance commit_idx
-            old_commit = self.commit_idx
-            for i in range(self.commit_idx + 1, len(self.log)):
-                if self.log[i].term == self.term:  # only commit current term entries
-                    match_count = 1  # leader counts as having it
-                    for peer_id, peer_match in self.match_idx.items():
-                        if peer_match >= i:
-                            match_count += 1
-                    if match_count * 2 > len(self.peer_ids) + 1:
-                        self.commit_idx = i
+        # Check if we can advance commit_idx
+        old_commit = self.commit_idx
+        for i in range(self.commit_idx + 1, len(self.log)):
+            if self.log[i].term == self.term:  # only commit current term entries
+                match_count = 1  # leader counts as having it
+                for peer_id, peer_match in self.match_idx.items():
+                    if peer_match >= i:
+                        match_count += 1
+                if match_count * 2 > len(self.peer_ids) + 1:
+                    self.commit_idx = i
 
-            if self.commit_idx > old_commit:
-                print(f"[Node {self.id}] [LEADER   ] Advanced commit_idx from {old_commit} to {self.commit_idx}")
+        if self.commit_idx > old_commit:
+            print(f"[Node {self.id}] [LEADER   ] Advanced commit_idx from {old_commit} to {self.commit_idx}")
 
     async def start_election(self):
         self.state = State.CANDIDATE
