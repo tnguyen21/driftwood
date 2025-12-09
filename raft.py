@@ -1,5 +1,5 @@
 import socket, asyncio, random, json
-from enum import Enum, auto
+from enum import Enum
 from dataclasses import dataclass, asdict, field
 from typing import Any
 
@@ -10,7 +10,7 @@ class State(Enum):
     LEADER = 3
 
 
-class MessageType(Enum):
+class MessageType:
     REQUEST_VOTE = "request_vote"
     VOTE_RESPONSE = "vote_response"
     APPEND_ENTRIES = "append_entries"
@@ -28,7 +28,7 @@ class Message:
 
 @dataclass
 class RequestVote(Message):
-    type: str = MessageType.REQUEST_VOTE.value
+    type: str = MessageType.REQUEST_VOTE
     term: int = 0
     candidate_id: int = 0
     last_log_index: int = 0
@@ -37,14 +37,14 @@ class RequestVote(Message):
 
 @dataclass
 class VoteResponse(Message):
-    type: str = MessageType.VOTE_RESPONSE.value
+    type: str = MessageType.VOTE_RESPONSE
     term: int = 0
     vote_granted: bool = False
 
 
 @dataclass
 class AppendEntries(Message):
-    type: str = MessageType.APPEND_ENTRIES.value
+    type: str = MessageType.APPEND_ENTRIES
     term: int = 0
     leader_id: int = 0
     last_log_index: int = 0
@@ -55,7 +55,7 @@ class AppendEntries(Message):
 
 @dataclass
 class AppendEntriesResponse(Message):
-    type: str = MessageType.APPEND_ENTRIES_RESPONSE.value
+    type: str = MessageType.APPEND_ENTRIES_RESPONSE
     peer_id: int = 0
     term: int = 0
     success: bool = False
@@ -166,7 +166,7 @@ class Node:
         print(f"[Node {self.id}] [{self.state.name:9}] Received {msg_type} from {addr}")
 
         match msg_type:
-            case MessageType.REQUEST_VOTE.value:
+            case MessageType.REQUEST_VOTE:
                 cand_id = parsed["candidate_id"]
                 self.become_follower(parsed["term"])
 
@@ -191,7 +191,7 @@ class Node:
                 msg = VoteResponse(term=self.term, vote_granted=vote_granted)
                 await self.send_to(msg.to_bytes(), addr)
 
-            case MessageType.VOTE_RESPONSE.value:
+            case MessageType.VOTE_RESPONSE:
                 if self.become_follower(parsed["term"]):
                     return
 
@@ -206,7 +206,7 @@ class Node:
                         self.match_idx = {peer_id: -1 for peer_id in self.peer_ids}
                         print(f"[Node {self.id}] [LEADER   ] 🎉 WON ELECTION with {self.votes_recvd}/{total_nodes} votes in term {self.term}")
 
-            case MessageType.APPEND_ENTRIES.value:
+            case MessageType.APPEND_ENTRIES:
                 reply = AppendEntriesResponse(peer_id=self.id, term=self.term, success=False)
 
                 if parsed["term"] < self.term:
@@ -250,7 +250,7 @@ class Node:
 
                 await self.send_to(reply.to_bytes(), addr)
 
-            case MessageType.APPEND_ENTRIES_RESPONSE.value:
+            case MessageType.APPEND_ENTRIES_RESPONSE:
                 peer_id = parsed["peer_id"]
 
                 if parsed["term"] >= self.term:
