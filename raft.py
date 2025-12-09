@@ -372,7 +372,6 @@ async def run_cluster(nodes):
 
 
 def find_leader(nodes):
-    """Find the current leader node, return None if no leader"""
     for node in nodes:
         if node.state == State.LEADER:
             return node
@@ -380,7 +379,6 @@ def find_leader(nodes):
 
 
 async def submit_command(nodes, command):
-    """Submit a command to the leader. Returns True if successful."""
     leader = find_leader(nodes)
     if leader is None:
         print(f"[CLIENT] No leader found, cannot submit command: {command}")
@@ -393,7 +391,6 @@ async def submit_command(nodes, command):
 
 
 def verify_log_replication(nodes, expected_length=None):
-    """Verify that all nodes have consistent logs"""
     print(f"\n{'=' * 60}")
     print("VERIFYING LOG REPLICATION")
     print(f"{'=' * 60}")
@@ -411,7 +408,6 @@ def verify_log_replication(nodes, expected_length=None):
 
 
 async def wait_for_leader_election(nodes, timeout=5.0):
-    """Wait for a leader to be elected"""
     print("[TEST] Waiting for leader election...")
     start = asyncio.get_running_loop().time()
 
@@ -427,7 +423,6 @@ async def wait_for_leader_election(nodes, timeout=5.0):
 
 
 async def wait_for_replication(nodes, expected_commit_idx, timeout=3.0):
-    """Wait for all nodes to replicate up to expected_commit_idx"""
     print(f"[TEST] Waiting for replication to commit_idx={expected_commit_idx}...")
     start = asyncio.get_running_loop().time()
 
@@ -453,23 +448,19 @@ async def test_basic_replication(nodes):
     print("TEST 1: BASIC REPLICATION")
     print(f"{'#' * 60}\n")
 
-    # Wait for initial leader election
     leader = await wait_for_leader_election(nodes)
     if not leader:
         return
 
     await asyncio.sleep(0.5)
 
-    # Submit a few commands
     commands = ["cmd1", "cmd2", "cmd3"]
     for cmd in commands:
         await submit_command(nodes, cmd)
         await asyncio.sleep(0.3)  # Give time for replication
 
-    # Wait for replication
     await wait_for_replication(nodes, expected_commit_idx=2)
 
-    # Verify logs
     verify_log_replication(nodes, expected_length=3)
 
 
@@ -479,7 +470,6 @@ async def test_leader_failure(nodes):
     print("TEST 2: LEADER FAILURE AND RE-ELECTION")
     print(f"{'#' * 60}\n")
 
-    # Wait for initial leader
     old_leader = await wait_for_leader_election(nodes)
     if not old_leader:
         return
@@ -487,13 +477,11 @@ async def test_leader_failure(nodes):
     old_leader_id = old_leader.id
     print(f"[TEST] Simulating leader failure: stopping node {old_leader_id}")
 
-    # Simulate leader failure by making it think it's no longer leader
     old_leader.state = State.FOLLOWER
     old_leader.term += 1
 
     await asyncio.sleep(0.7)  # Wait for new election
 
-    # Check for new leader
     new_leader = find_leader(nodes)
     if new_leader and new_leader.id != old_leader_id:
         print(f"[TEST] New leader elected: node {new_leader.id}")
@@ -515,19 +503,16 @@ async def test_sequential_commands(nodes):
 
     await asyncio.sleep(0.5)
 
-    # Submit commands rapidly
     print("[TEST] Submitting 5 commands rapidly...")
     for i in range(5):
         await submit_command(nodes, f"rapid_{i}")
 
-    # Wait for replication
     await wait_for_replication(nodes, expected_commit_idx=4)
 
     verify_log_replication(nodes, expected_length=5)
 
 
 async def run_tests(nodes):
-    # Let cluster stabilize and elect initial leader
     await asyncio.sleep(1.0)
 
     await test_basic_replication(nodes)
@@ -543,7 +528,6 @@ async def run_tests(nodes):
     print("ALL TESTS COMPLETED")
     print(f"{'=' * 60}\n")
 
-    # Shutdown the cluster
     print("[TEST] Shutting down cluster...")
     for node in nodes:
         node.shutdown()
