@@ -129,7 +129,6 @@ class Node:
                 raise
 
     async def election_timer(self):
-        """Monitors election timeout and triggers elections"""
         while self.running:
             await asyncio.sleep(0.01)
 
@@ -362,7 +361,6 @@ class Node:
             loop = asyncio.get_running_loop()
             await loop.sock_sendto(self.sock, message, addr)
         except (OSError, AttributeError):
-            # Socket closed or invalid, ignore
             pass
 
     async def broadcast_to_peers(self, message):
@@ -373,7 +371,6 @@ class Node:
             try:
                 await loop.sock_sendto(self.sock, message, peer_addr)
             except (OSError, AttributeError):
-                # Socket closed or invalid, ignore
                 pass
 
     def reset_election_timer(self):
@@ -385,7 +382,6 @@ class Node:
         return random.uniform(0.3, 0.5)
 
     def shutdown(self):
-        """Shutdown this node gracefully"""
         print(f"[Node {self.id}] Shutting down...")
         self.running = False
         if self.sock:
