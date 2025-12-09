@@ -8,6 +8,13 @@ class MessageType:
     VOTE_RESPONSE = "vote_response"
     APPEND_ENTRIES = "append_entries"
     APPEND_ENTRIES_RESPONSE = "append_entries_response"
+    # Control messages for testing
+    CONTROL_TICK = "control_tick"
+    CONTROL_QUERY_STATE = "control_query_state"
+    CONTROL_STATE_RESPONSE = "control_state_response"
+    CONTROL_SUBMIT_COMMAND = "control_submit_command"
+    CONTROL_PARTITION = "control_partition"
+    CONTROL_SHUTDOWN = "control_shutdown"
 
 
 class Message:
@@ -58,11 +65,58 @@ class LogEntry(Message):
     term: int = 0
 
 
+# Control messages for testing
+@dataclass
+class ControlTick(Message):
+    type: str = MessageType.CONTROL_TICK
+
+
+@dataclass
+class ControlQueryState(Message):
+    type: str = MessageType.CONTROL_QUERY_STATE
+
+
+@dataclass
+class ControlStateResponse(Message):
+    type: str = MessageType.CONTROL_STATE_RESPONSE
+    node_id: int = 0
+    state: str = ""
+    term: int = 0
+    current_tick: int = 0
+    commit_idx: int = 0
+    voted_for: int | None = None
+    log: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class ControlSubmitCommand(Message):
+    type: str = MessageType.CONTROL_SUBMIT_COMMAND
+    command: Any = None
+
+
+@dataclass
+class ControlPartition(Message):
+    type: str = MessageType.CONTROL_PARTITION
+    isolated: bool = False
+    allowed_peers: list[int] | None = None
+
+
+@dataclass
+class ControlShutdown(Message):
+    type: str = MessageType.CONTROL_SHUTDOWN
+
+
 MESSAGE_CLASSES = {
     MessageType.REQUEST_VOTE: RequestVote,
     MessageType.VOTE_RESPONSE: VoteResponse,
     MessageType.APPEND_ENTRIES: AppendEntries,
     MessageType.APPEND_ENTRIES_RESPONSE: AppendEntriesResponse,
+    MessageType.CONTROL_TICK: ControlTick,
+    MessageType.CONTROL_QUERY_STATE: ControlQueryState,
+    MessageType.CONTROL_STATE_RESPONSE: ControlStateResponse,
+    MessageType.CONTROL_SUBMIT_COMMAND: ControlSubmitCommand,
+    MessageType.CONTROL_PARTITION: ControlPartition,
+    MessageType.CONTROL_SHUTDOWN: ControlShutdown,
 }
 
 

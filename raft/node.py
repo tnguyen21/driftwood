@@ -14,6 +14,12 @@ from typing import Any
 from raft.messages import (
     AppendEntries,
     AppendEntriesResponse,
+    ControlPartition,
+    ControlQueryState,
+    ControlShutdown,
+    ControlStateResponse,
+    ControlSubmitCommand,
+    ControlTick,
     LogEntry,
     RequestVote,
     VoteResponse,
@@ -94,6 +100,10 @@ class TickNode:
                 f"ticks_since_hb={ticks_since_hb}, timeout={self.election_timeout_ticks}"
             )
 
+        # Temporarily set socket to non-blocking to drain message queue
+        original_blocking = self.sock.getblocking()
+        self.sock.setblocking(False)
+
         # Process all available UDP messages (non-blocking)
         while True:
             try:
@@ -105,6 +115,9 @@ class TickNode:
             except Exception as e:
                 print(f"[Node {self.id}] Error receiving message: {e}")
                 break
+
+        # Restore original blocking state
+        self.sock.setblocking(original_blocking)
 
         # Check election timeout (if not leader)
         if self.state != State.LEADER:
@@ -118,6 +131,55 @@ class TickNode:
                 self._send_heartbeats()
 
     # Core Raft logic (synchronous versions)
+
+    def handle_control_message(self, data: bytes, addr: tuple[str, int]) -> bytes | None:
+        """Handle control messages from test coordinator.
+
+        Returns response bytes if a response should be sent, None otherwise.
+        """
+        try:
+            msg = decode_message(data)
+        except Exception as e:
+            print(f"[Node {self.id}] Error decoding control message: {e}")
+            return None
+
+        match msg:
+            case ControlTick():
+                # Advance the node by one tick
+                self.tick()
+                return None
+
+            case ControlQueryState():
+                # Return current node state
+                response = ControlStateResponse(
+                    node_id=self.id,
+                    state=self.state.name,
+                    term=self.term,
+                    current_tick=self.current_tick,
+                    commit_idx=self.commit_idx,
+                    voted_for=self.voted_for,
+                    log=[{"term": e.term, "data": e.data} for e in self.log],
+                )
+                return response.to_bytes()
+
+            case ControlSubmitCommand():
+                # Append entry to log (only if leader)
+                self.append_entry(msg.command)
+                return None
+
+            case ControlPartition():
+                # Set partition state
+                self.set_partition(isolated=msg.isolated, allowed_peers=msg.allowed_peers)
+                return None
+
+            case ControlShutdown():
+                # Shutdown the node
+                self.shutdown()
+                return None
+
+            case _:
+                # Not a control message, return None
+                return None
 
     def _handle_message(self, data: bytes, addr: tuple[str, int]):
         try:

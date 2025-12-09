@@ -1,44 +1,49 @@
 """Cluster management helpers for testing.
 
 This module provides helpers for managing clusters of Raft nodes:
-- MultiprocessCluster: Manages nodes running in separate processes
-- InProcessCluster: Manages nodes in the same process (faster for unit tests)
+- MultiprocessCluster: Manages nodes running in separate processes with UDP control
 """
 
 import json
+import socket
 import subprocess
 import sys
 import time
 from typing import Any
 
-import requests
-
-from raft.node import TickNode
+from raft.messages import (
+    ControlPartition,
+    ControlQueryState,
+    ControlSubmitCommand,
+    ControlTick,
+    decode_message,
+)
 
 
 class MultiprocessCluster:
     """Manages a cluster of Raft nodes in separate processes.
 
     Each node runs in its own process with UDP communication.
-    The cluster manager coordinates tick advancement and provides
-    utilities for querying state and injecting failures.
+    The cluster manager coordinates tick advancement via UDP control messages.
     """
 
-    def __init__(self, n_nodes: int, base_udp_port: int = 10000, base_http_port: int = 20000):
+    def __init__(self, n_nodes: int, base_udp_port: int = 10000):
         """Initialize multiprocess cluster.
 
         Args:
             n_nodes: Number of nodes in the cluster
             base_udp_port: Starting port for UDP sockets
-            base_http_port: Starting port for HTTP control servers
         """
         self.n_nodes = n_nodes
         self.processes: dict[int, subprocess.Popen] = {}
-        self.http_ports = {i: base_http_port + i for i in range(n_nodes)}
         self.udp_ports = {i: base_udp_port + i for i in range(n_nodes)}
 
         # Network partition state
         self.partitioned_nodes: set[int] = set()
+
+        # Control socket for sending messages to nodes
+        self.control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.control_sock.settimeout(1.0)  # 1 second timeout for receives
 
     def start_node(self, node_id: int, random_seed: int | None = None):
         """Start a node process with subprocess.Popen.
@@ -62,8 +67,6 @@ class MultiprocessCluster:
             str(node_id),
             "--udp-port",
             str(self.udp_ports[node_id]),
-            "--http-port",
-            str(self.http_ports[node_id]),
             "--peers",
             json.dumps(peers),
             "--peer-ids",
@@ -97,16 +100,20 @@ class MultiprocessCluster:
         Args:
             n_ticks: Number of ticks to advance
         """
+        tick_msg = ControlTick()
         for _ in range(n_ticks):
             for node_id in range(self.n_nodes):
                 if node_id in self.processes and self.processes[node_id].poll() is None:
                     try:
-                        requests.post(f"http://localhost:{self.http_ports[node_id]}/tick", timeout=1)
-                    except requests.exceptions.RequestException as e:
+                        addr = ("localhost", self.udp_ports[node_id])
+                        self.control_sock.sendto(tick_msg.to_bytes(), addr)
+                        # Small delay to let tick complete before next one
+                        time.sleep(0.001)
+                    except Exception as e:
                         print(f"[Cluster] Error ticking node {node_id}: {e}")
 
     def get_node_state(self, node_id: int) -> dict[str, Any] | None:
-        """Query node state via HTTP.
+        """Query node state via UDP control message.
 
         Args:
             node_id: ID of the node to query
@@ -118,9 +125,29 @@ class MultiprocessCluster:
             return None
 
         try:
-            response = requests.get(f"http://localhost:{self.http_ports[node_id]}/state", timeout=1)
-            return response.json()
-        except requests.exceptions.RequestException as e:
+            # Send query state message
+            query_msg = ControlQueryState()
+            addr = ("localhost", self.udp_ports[node_id])
+            self.control_sock.sendto(query_msg.to_bytes(), addr)
+
+            # Wait for response
+            data, _ = self.control_sock.recvfrom(4096)
+            response = decode_message(data)
+
+            # Convert to dict format expected by tests
+            return {
+                "id": response.node_id,
+                "state": response.state,
+                "term": response.term,
+                "current_tick": response.current_tick,
+                "commit_idx": response.commit_idx,
+                "voted_for": response.voted_for,
+                "log": response.log,
+            }
+        except socket.timeout:
+            print(f"[Cluster] Timeout getting state from node {node_id}")
+            return None
+        except Exception as e:
             print(f"[Cluster] Error getting state from node {node_id}: {e}")
             return None
 
@@ -150,9 +177,11 @@ class MultiprocessCluster:
         """
         self.partitioned_nodes.add(node_id)
         try:
-            requests.post(f"http://localhost:{self.http_ports[node_id]}/partition", json={"isolated": True}, timeout=1)
+            partition_msg = ControlPartition(isolated=True)
+            addr = ("localhost", self.udp_ports[node_id])
+            self.control_sock.sendto(partition_msg.to_bytes(), addr)
             print(f"[Cluster] Partitioned node {node_id}")
-        except requests.exceptions.RequestException as e:
+        except Exception as e:
             print(f"[Cluster] Error partitioning node {node_id}: {e}")
 
     def partition_groups(self, group_a: list[int], group_b: list[int]):
@@ -165,15 +194,19 @@ class MultiprocessCluster:
         # Configure group A to only accept messages from group A
         for node_id in group_a:
             try:
-                requests.post(f"http://localhost:{self.http_ports[node_id]}/partition", json={"allowed_peers": group_a}, timeout=1)
-            except requests.exceptions.RequestException as e:
+                partition_msg = ControlPartition(allowed_peers=group_a)
+                addr = ("localhost", self.udp_ports[node_id])
+                self.control_sock.sendto(partition_msg.to_bytes(), addr)
+            except Exception as e:
                 print(f"[Cluster] Error partitioning node {node_id}: {e}")
 
         # Configure group B to only accept messages from group B
         for node_id in group_b:
             try:
-                requests.post(f"http://localhost:{self.http_ports[node_id]}/partition", json={"allowed_peers": group_b}, timeout=1)
-            except requests.exceptions.RequestException as e:
+                partition_msg = ControlPartition(allowed_peers=group_b)
+                addr = ("localhost", self.udp_ports[node_id])
+                self.control_sock.sendto(partition_msg.to_bytes(), addr)
+            except Exception as e:
                 print(f"[Cluster] Error partitioning node {node_id}: {e}")
 
         print(f"[Cluster] Created partition: {group_a} | {group_b}")
@@ -188,17 +221,21 @@ class MultiprocessCluster:
             if node_id in self.partitioned_nodes:
                 self.partitioned_nodes.remove(node_id)
             try:
-                requests.post(f"http://localhost:{self.http_ports[node_id]}/partition", json={"isolated": False}, timeout=1)
+                heal_msg = ControlPartition(isolated=False, allowed_peers=None)
+                addr = ("localhost", self.udp_ports[node_id])
+                self.control_sock.sendto(heal_msg.to_bytes(), addr)
                 print(f"[Cluster] Healed partition for node {node_id}")
-            except requests.exceptions.RequestException as e:
+            except Exception as e:
                 print(f"[Cluster] Error healing partition for node {node_id}: {e}")
         else:
             # Heal all nodes
+            heal_msg = ControlPartition(isolated=False, allowed_peers=None)
             for i in range(self.n_nodes):
                 if i in self.processes and self.processes[i].poll() is None:
                     try:
-                        requests.post(f"http://localhost:{self.http_ports[i]}/partition", json={"isolated": False}, timeout=1)
-                    except requests.exceptions.RequestException:
+                        addr = ("localhost", self.udp_ports[i])
+                        self.control_sock.sendto(heal_msg.to_bytes(), addr)
+                    except Exception:
                         pass
             self.partitioned_nodes.clear()
             print("[Cluster] Healed all partitions")
@@ -211,12 +248,15 @@ class MultiprocessCluster:
             command: Command data
 
         Returns:
-            True if successful, False otherwise
+            True if node is running (actual success depends on if node is leader)
         """
         try:
-            response = requests.post(f"http://localhost:{self.http_ports[node_id]}/append_entry", json={"command": command}, timeout=1)
-            return response.json().get("success", False)
-        except requests.exceptions.RequestException as e:
+            submit_msg = ControlSubmitCommand(command=command)
+            addr = ("localhost", self.udp_ports[node_id])
+            self.control_sock.sendto(submit_msg.to_bytes(), addr)
+            # Note: We don't wait for response, just assume it was delivered
+            return True
+        except Exception as e:
             print(f"[Cluster] Error appending entry to node {node_id}: {e}")
             return False
 
@@ -225,6 +265,11 @@ class MultiprocessCluster:
         print("[Cluster] Shutting down all nodes...")
         for node_id in list(self.processes.keys()):
             self.kill_node(node_id)
+        # Close control socket
+        try:
+            self.control_sock.close()
+        except Exception:
+            pass
         print("[Cluster] All nodes stopped")
 
     def print_cluster_state(self):
@@ -245,94 +290,3 @@ class MultiprocessCluster:
                 print(f"Node {i} [DEAD     ]")
 
         print(f"{'=' * 80}\n")
-
-
-class InProcessCluster:
-    """Manages a cluster of Raft nodes in the same process.
-
-    This is faster than multiprocess testing and useful for unit tests.
-    Messages are routed in-memory instead of via UDP.
-    """
-
-    def __init__(self, n_nodes: int, random_seed: int | None = None):
-        """Initialize in-process cluster.
-
-        Args:
-            n_nodes: Number of nodes in the cluster
-            random_seed: Optional base seed for deterministic behavior
-        """
-        self.n_nodes = n_nodes
-        self.nodes: list[TickNode] = []
-
-        # Create nodes
-        for i in range(n_nodes):
-            peer_ids = [j for j in range(n_nodes) if j != i]
-            seed = (random_seed + i) if random_seed is not None else None
-            node = TickNode(id=i, peer_ids=peer_ids, random_seed=seed)
-            self.nodes.append(node)
-
-    def tick_cluster(self, n_ticks: int = 1):
-        """Advance all nodes by n ticks, routing messages in-memory.
-
-        Args:
-            n_ticks: Number of ticks to advance
-        """
-        for _ in range(n_ticks):
-            # First, advance all nodes by one tick
-            for node in self.nodes:
-                node.current_tick += 1
-
-                # Check election timeout
-                if node.state.name != "LEADER":
-                    ticks_since_heartbeat = node.current_tick - node.last_heartbeat_tick
-                    if ticks_since_heartbeat >= node.election_timeout_ticks:
-                        node._start_election()
-
-                # Send heartbeats if leader
-                if node.state.name == "LEADER":
-                    if node.current_tick % node.heartbeat_interval_ticks == 0:
-                        node._send_heartbeats()
-
-            # Route messages between nodes (in-memory)
-            for from_node in self.nodes:
-                # Since we're in-process, we need to simulate message passing
-                # This is a simplified version - real implementation would need
-                # to capture messages during tick() execution
-                pass
-
-    def get_node_state(self, node_id: int) -> dict[str, Any]:
-        """Get node state.
-
-        Args:
-            node_id: ID of the node
-
-        Returns:
-            Node state dict
-        """
-        node = self.nodes[node_id]
-        return {
-            "id": node.id,
-            "state": node.state.name,
-            "term": node.term,
-            "current_tick": node.current_tick,
-            "commit_idx": node.commit_idx,
-            "voted_for": node.voted_for,
-            "log": [{"term": e.term, "data": e.data} for e in node.log],
-        }
-
-    def append_entry(self, node_id: int, command: Any) -> bool:
-        """Append entry to node's log.
-
-        Args:
-            node_id: ID of the node
-            command: Command data
-
-        Returns:
-            True if successful
-        """
-        return self.nodes[node_id].append_entry(command)
-
-    def shutdown(self):
-        """Shutdown all nodes."""
-        for node in self.nodes:
-            node.shutdown()
