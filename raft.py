@@ -206,6 +206,8 @@ class Node:
                         self.match_idx = {peer_id: -1 for peer_id in self.peer_ids}
                         print(f"[Node {self.id}] [LEADER   ] 🎉 WON ELECTION with {self.votes_recvd}/{total_nodes} votes in term {self.term}")
 
+                self.reset_election_timer()
+
             case MessageType.APPEND_ENTRIES:
                 reply = AppendEntriesResponse(peer_id=self.id, term=self.term, success=False)
 
@@ -215,7 +217,6 @@ class Node:
 
                 if parsed["term"] >= self.term:
                     self.become_follower(parsed["term"])
-                self.reset_election_timer()
 
                 prev_log_index = parsed["last_log_index"]
                 prev_log_term = parsed["last_log_term"]
@@ -247,6 +248,8 @@ class Node:
                         old_commit = self.commit_idx
                         self.commit_idx = min(parsed["leader_commit"], len(self.log) - 1)
                         print(f"[Node {self.id}] [{self.state.name:9}] Advanced commit_idx from {old_commit} to {self.commit_idx}")
+
+                    self.reset_election_timer()
 
                 await self.send_to(reply.to_bytes(), addr)
 
@@ -283,8 +286,6 @@ class Node:
 
             case _:
                 print("unknown message type")
-
-        self.reset_election_timer()
 
     async def start_election(self):
         self.state = State.CANDIDATE
