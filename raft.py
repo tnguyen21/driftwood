@@ -15,7 +15,6 @@ class MessageType(Enum):
     VOTE_RESPONSE = "vote_response"
     APPEND_ENTRIES = "append_entries"
     APPEND_ENTRIES_RESPONSE = "append_entries_response"
-    HEARTBEAT = "heartbeat"
     COMMIT = "commit"
 
 
@@ -68,12 +67,6 @@ class AppendEntriesResponse(Message):
 class Commit(Message):
     type: str = MessageType.COMMIT.value
     log_idx: int = 0
-    term: int = 0
-
-
-@dataclass
-class Heartbeat(Message):
-    type: str = MessageType.HEARTBEAT.value
     term: int = 0
 
 
@@ -221,12 +214,6 @@ class Node:
                         self.match_idx = {peer_id: -1 for peer_id in self.peer_ids}
                         print(f"[Node {self.id}] [LEADER   ] 🎉 WON ELECTION with {self.votes_recvd}/{total_nodes} votes in term {self.term}")
 
-            case MessageType.HEARTBEAT.value:
-                if parsed["term"] >= self.term:
-                    self.state = State.FOLLOWER
-                    self.term = parsed["term"]
-                    self.voted_for = None
-
             case MessageType.APPEND_ENTRIES.value:
                 reply = AppendEntriesResponse(peer_id=self.id, term=self.term, success=False)
 
@@ -347,13 +334,25 @@ class Node:
     # Utilities
 
     async def send_to(self, message, addr):
-        loop = asyncio.get_running_loop()
-        await loop.sock_sendto(self.sock, message, addr)
+        if not self.running or not self.sock:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.sock_sendto(self.sock, message, addr)
+        except (OSError, AttributeError):
+            # Socket closed or invalid, ignore
+            pass
 
     async def broadcast_to_peers(self, message):
+        if not self.running or not self.sock:
+            return
         loop = asyncio.get_running_loop()
         for peer_addr in self.peers:
-            await loop.sock_sendto(self.sock, message, peer_addr)
+            try:
+                await loop.sock_sendto(self.sock, message, peer_addr)
+            except (OSError, AttributeError):
+                # Socket closed or invalid, ignore
+                pass
 
     def reset_election_timer(self):
         """Called when receiving valid heartbeat or granting vote"""
@@ -368,7 +367,11 @@ class Node:
         print(f"[Node {self.id}] Shutting down...")
         self.running = False
         if self.sock:
-            self.sock.close()
+            try:
+                self.sock.close()
+            except:
+                pass
+            self.sock = None
 
 
 async def run_cluster(nodes):
@@ -555,10 +558,6 @@ async def run_tests(nodes):
     for node in nodes:
         node.shutdown()
 
-    # Give nodes time to exit cleanly
-    await asyncio.sleep(1)
-
-
 async def run_cluster_with_tests(nodes):
     await asyncio.gather(
         run_cluster(nodes),
@@ -576,4 +575,7 @@ if __name__ == "__main__":
         peer_ids = [i for i in range(n_nodes) if i != id]
         nodes.append(Node(my_addr, my_port, id, peers, peer_ids))
 
-    asyncio.run(run_cluster_with_tests(nodes))
+    try:
+        asyncio.run(run_cluster_with_tests(nodes))
+    except KeyboardInterrupt:
+        print("Shutting down!")
