@@ -56,6 +56,9 @@ class TickNode:
         self.id = id
         self.peer_ids = peer_ids or []
 
+        # Random generator for deterministic testing (must be initialized first)
+        self._random = random.Random(random_seed)
+
         # Raft state
         self.state = State.FOLLOWER
         self.term = 0
@@ -83,9 +86,6 @@ class TickNode:
 
         # Network partition simulation
         self.partition_state = {"isolated": False, "allowed_peers": None}
-
-        # Random generator for deterministic testing
-        self._random = random.Random(random_seed)
 
         # Running flag
         self.running = True
