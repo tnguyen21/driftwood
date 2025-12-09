@@ -8,6 +8,8 @@ doing the core event loop in a single-thread allows us to eschew a lot of the co
 
 raft is complex enough! let's not add more ways we can get confused and introduce subtle bugs!
 
+this isn't intended to be a performant or particularly complete implementation of raft. rather, it hopes to demonstrate enough of the core mechanics of the algorithm that it's correct under reasonable conditions and the less pathological error scenarios.
+
 ---
 
 election.py demonstrates the leader election algorithm. running it produces the following logs:
