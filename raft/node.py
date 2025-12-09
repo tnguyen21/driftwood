@@ -21,6 +21,7 @@ from raft.messages import (
     ControlSubmitCommand,
     ControlTick,
     LogEntry,
+    MessageType,
     RequestVote,
     VoteResponse,
     decode_message,
@@ -96,14 +97,26 @@ class TickNode:
     # Message handling
 
     def _drain_raft_messages(self):
-        """Drain all pending messages from the socket (non-blocking)."""
+        """Drain all pending Raft messages from the socket (non-blocking)."""
         original_blocking = self.sock.getblocking()
         self.sock.setblocking(False)
 
         while True:
             try:
                 data, addr = self.sock.recvfrom(1024)
-                self._handle_message(data, addr)
+                # Only process Raft messages, ignore control messages during drain
+                try:
+                    msg = decode_message(data)
+                    if msg.type not in (
+                        MessageType.CONTROL_TICK,
+                        MessageType.CONTROL_QUERY_STATE,
+                        MessageType.CONTROL_SUBMIT_COMMAND,
+                        MessageType.CONTROL_PARTITION,
+                        MessageType.CONTROL_SHUTDOWN,
+                    ):
+                        self._handle_raft_message(msg, addr)
+                except Exception:
+                    pass
             except BlockingIOError:
                 break
             except Exception as e:
@@ -113,7 +126,7 @@ class TickNode:
         self.sock.setblocking(original_blocking)
 
     def _handle_message(self, data: bytes, addr: tuple[str, int]):
-        """Unified message handler for all message types."""
+        """Unified message handler for both control and Raft messages."""
         try:
             msg = decode_message(data)
         except Exception as e:
@@ -147,30 +160,9 @@ class TickNode:
             case ControlShutdown():
                 self.shutdown()
 
-            # Raft protocol messages
-            case RequestVote():
-                if not self._should_accept_message(msg.sender_id):
-                    return
-                print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from node {msg.sender_id}")
-                self._handle_request_vote(msg, addr)
-
-            case VoteResponse():
-                if not self._should_accept_message(msg.sender_id):
-                    return
-                print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from node {msg.sender_id}")
-                self._handle_vote_response(msg, addr)
-
-            case AppendEntries():
-                if not self._should_accept_message(msg.sender_id):
-                    return
-                print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from node {msg.sender_id}")
-                self._handle_append_entries(msg, addr)
-
-            case AppendEntriesResponse():
-                if not self._should_accept_message(msg.sender_id):
-                    return
-                print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from node {msg.sender_id}")
-                self._handle_append_entries_response(msg, addr)
+            # Raft messages
+            case RequestVote() | VoteResponse() | AppendEntries() | AppendEntriesResponse():
+                self._handle_raft_message(msg, addr)
 
             case _:
                 print(f"[Node {self.id}] Unknown message type: {msg.type}")
@@ -200,6 +192,27 @@ class TickNode:
         if self.state == State.LEADER:
             if self.current_tick % self.heartbeat_interval_ticks == 0:
                 self._send_heartbeats()
+
+    def _handle_raft_message(self, msg, addr: tuple[str, int]):
+        """Handle Raft protocol messages (RequestVote, AppendEntries, etc.)."""
+        # Check partition state
+        if hasattr(msg, "sender_id") and msg.sender_id is not None:
+            if not self._should_accept_message(msg.sender_id):
+                return
+
+            print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from node {msg.sender_id}")
+        else:
+            print(f"[Node {self.id}] [{self.state.name:9}] [tick {self.current_tick:4}] Received {msg.type} from {addr}")
+
+        match msg:
+            case RequestVote():
+                self._handle_request_vote(msg, addr)
+            case VoteResponse():
+                self._handle_vote_response(msg, addr)
+            case AppendEntries():
+                self._handle_append_entries(msg, addr)
+            case AppendEntriesResponse():
+                self._handle_append_entries_response(msg, addr)
 
     def _handle_request_vote(self, msg: RequestVote, addr: tuple[str, int]):
         self._become_follower(msg.term)
