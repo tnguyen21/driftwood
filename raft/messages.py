@@ -14,6 +14,20 @@ class Message:
     def to_bytes(self) -> bytes:
         return json.dumps(asdict(self)).encode("utf-8")
 
+    @property
+    def sender_id(self) -> int | None:
+        """Extract sender node ID from message fields."""
+        # Different message types use different field names for sender
+        if hasattr(self, "candidate_id"):
+            return self.candidate_id
+        elif hasattr(self, "leader_id"):
+            return self.leader_id
+        elif hasattr(self, "peer_id"):
+            return self.peer_id
+        elif hasattr(self, "voter_id"):
+            return self.voter_id
+        return None
+
 
 @dataclass
 class RequestVote(Message):
@@ -27,6 +41,7 @@ class RequestVote(Message):
 @dataclass
 class VoteResponse(Message):
     type: str = MessageType.VOTE_RESPONSE
+    voter_id: int = 0
     term: int = 0
     vote_granted: bool = False
 

@@ -89,7 +89,10 @@ class TickNode:
         # Debug: print every 50 ticks
         if self.current_tick % 50 == 0:
             ticks_since_hb = self.current_tick - self.last_heartbeat_tick
-            print(f"[Node {self.id}] Tick {self.current_tick}: state={self.state.name}, term={self.term}, ticks_since_hb={ticks_since_hb}, timeout={self.election_timeout_ticks}")
+            print(
+                f"[Node {self.id}] Tick {self.current_tick}: state={self.state.name}, term={self.term}, "
+                f"ticks_since_hb={ticks_since_hb}, timeout={self.election_timeout_ticks}"
+            )
 
         # Process all available UDP messages (non-blocking)
         while True:
@@ -123,15 +126,8 @@ class TickNode:
             print(f"[Node {self.id}] Error decoding message: {e}")
             return
 
-        # Extract sender ID from the message itself (not from address)
-        # Different message types have sender info in different fields
-        from_node_id = None
-        if hasattr(msg, 'candidate_id'):
-            from_node_id = msg.candidate_id
-        elif hasattr(msg, 'leader_id'):
-            from_node_id = msg.leader_id
-        elif hasattr(msg, 'peer_id'):
-            from_node_id = msg.peer_id
+        # Extract sender ID from message
+        from_node_id = msg.sender_id
 
         # Check partition state (if we can identify sender)
         if from_node_id is not None and not self._should_accept_message(from_node_id):
@@ -176,7 +172,7 @@ class TickNode:
         if vote_granted:
             self._reset_election_timer()
 
-        response = VoteResponse(term=self.term, vote_granted=vote_granted)
+        response = VoteResponse(voter_id=self.id, term=self.term, vote_granted=vote_granted)
         self._send_to_addr(response, addr)
 
     def _handle_vote_response(self, msg: VoteResponse, addr: tuple[str, int]):
@@ -317,11 +313,13 @@ class TickNode:
         self.state = State.LEADER
         self.next_idx = {peer_id: len(self.log) for peer_id in self.peer_ids}
         self.match_idx = {peer_id: -1 for peer_id in self.peer_ids}
+        total_nodes = len(self.peer_ids) + 1
         print(
-            f"[Node {self.id}] [LEADER   ] [tick {self.current_tick:4}] Won election with {self.votes_recvd}/{len(self.peer_ids) + 1} votes in term {self.term}"
+            f"[Node {self.id}] [LEADER   ] [tick {self.current_tick:4}] "
+            f"Won election with {self.votes_recvd}/{total_nodes} votes in term {self.term}"
         )
 
-    # Network and partition management
+    # Mocks for network and partition management
 
     def set_partition(self, isolated: bool = False, allowed_peers: list[int] | None = None):
         """Configure network partition for testing.

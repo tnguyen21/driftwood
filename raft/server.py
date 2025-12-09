@@ -19,16 +19,11 @@ if TYPE_CHECKING:
 
 
 class ControlHandler(BaseHTTPRequestHandler):
-    """HTTP request handler for Raft node control."""
-
-    def log_message(self, format, *args):
-        """Suppress default HTTP logging to avoid clutter."""
-        pass
+    def log_message(self, format, *args): 
+        pass # suppress default logging
 
     def do_POST(self):
-        """Handle POST requests."""
         if self.path == "/tick":
-            # Advance node by one tick
             self.server.node.tick()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -37,7 +32,6 @@ class ControlHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(response).encode())
 
         elif self.path == "/append_entry":
-            # Append a client command
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
             data = json.loads(body.decode())
@@ -51,7 +45,6 @@ class ControlHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(response).encode())
 
         elif self.path == "/partition":
-            # Configure network partition
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
             data = json.loads(body.decode())
@@ -68,7 +61,6 @@ class ControlHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(response).encode())
 
         elif self.path == "/shutdown":
-            # Shutdown the node
             self.server.node.shutdown()
 
             self.send_response(200)
@@ -85,9 +77,7 @@ class ControlHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_GET(self):
-        """Handle GET requests."""
         if self.path == "/state":
-            # Return node state as JSON
             state = {
                 "id": self.server.node.id,
                 "state": self.server.node.state.name,
@@ -106,7 +96,6 @@ class ControlHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(state).encode())
 
         elif self.path == "/health":
-            # Health check endpoint
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -126,13 +115,6 @@ class ControlServer(HTTPServer):
     """
 
     def __init__(self, node: "TickNode", host: str = "localhost", port: int = 20000):
-        """Initialize control server.
-
-        Args:
-            node: TickNode instance to control
-            host: Host to bind to
-            port: Port to bind to
-        """
         super().__init__((host, port), ControlHandler)
         self.node = node
         print(f"[Node {node.id}] HTTP control server started on {host}:{port}")
