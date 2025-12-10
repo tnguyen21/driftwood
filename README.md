@@ -1,4 +1,4 @@
-driftwood (a poor man's broken Raft)
+driftwood (a poor man's Raft)
 
 ...
 
