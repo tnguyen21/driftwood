@@ -6,10 +6,13 @@ but time advancement is controlled externally via the tick() method.
 """
 
 from collections import deque
+import json
+import os
 import random
 import socket
 from dataclasses import asdict
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from raft.messages import (
@@ -34,7 +37,7 @@ class State(Enum):
 
 
 class TickNode:
-    def __init__(self, id: int = 0, peer_ids: list[int] | None = None, random_seed: int | None = None):
+    def __init__(self, id: int = 0, peer_ids: list[int] | None = None, random_seed: int | None = None, state_dir: str | Path | None = None):
         self.id = id
         self.peer_ids = peer_ids or []
 
@@ -54,8 +57,8 @@ class TickNode:
         self.heartbeat_interval_ticks = 50  # send heartbeat every 50 ticks
 
         # Commit state
-        self.commit_idx = -1
-        self.last_applied = -1
+        self.commit_idx = 0
+        self.last_applied = 0
 
         # Leader state - keyed by peer_id
         self.next_idx: dict[int, int] = {}
@@ -67,6 +70,12 @@ class TickNode:
 
         # Running flag
         self.running = True
+
+        self.state_dir = Path(state_dir or os.environ.get("RAFT_STATE_DIR", ".raft_state")).expanduser()
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.state_file = self.state_dir / f"node_{self.id}.json"
+
+        self._load_persisted_state()
 
     def start_udp(self, addr: str = "localhost", port: int = 10000, peers: list[tuple[str, int]] | None = None):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -191,6 +200,7 @@ class TickNode:
             if log_ok:
                 vote_granted = True
                 self.voted_for = msg.sender_id
+                self._persist_state()
                 print(f"[Node {self.id}] [{self.state.name:9}] Granting vote to candidate {msg.sender_id} for term {self.term}")
             else:
                 print(f"[Node {self.id}] [{self.state.name:9}] Denying vote to candidate {msg.sender_id} - log not up-to-date")
@@ -222,6 +232,7 @@ class TickNode:
 
     def _handle_append_entries(self, msg: AppendEntries, addr: tuple[str, int]):
         reply = AppendEntriesResponse(sender_id=self.id, term=self.term, success=False)
+        state_changed = False
 
         if msg.term < self.term:
             self._send_to_addr(reply, addr)
@@ -246,6 +257,7 @@ class TickNode:
             # Truncate conflicting entries and append new ones
             if new_entries_idx < len(entries):
                 self.log = self.log[:log_insert_idx] + entries[new_entries_idx:]
+                state_changed = True
                 print(f"[Node {self.id}] [{self.state.name:9}] Appended {len(entries[new_entries_idx:])} entries at index {log_insert_idx}")
 
             # Set match_idx after appending entries
@@ -255,8 +267,12 @@ class TickNode:
                 old_commit = self.commit_idx
                 self.commit_idx = min(msg.leader_commit, len(self.log) - 1)
                 print(f"[Node {self.id}] [{self.state.name:9}] Advanced commit_idx from {old_commit} to {self.commit_idx}")
+                state_changed = True
 
             self._reset_election_timer()
+
+        if state_changed:
+            self._persist_state()
 
         self._send_to_addr(reply, addr)
 
@@ -288,6 +304,7 @@ class TickNode:
 
             if self.commit_idx > old_commit:
                 print(f"[Node {self.id}] [LEADER   ] Advanced commit_idx from {old_commit} to {self.commit_idx}")
+                self._persist_state()
 
     def _start_election(self):
         self.state = State.CANDIDATE
@@ -295,6 +312,7 @@ class TickNode:
         self.voted_for = self.id
         self.votes_recvd = 1
         self._reset_election_timer()
+        self._persist_state()
         print(f"[Node {self.id}] [CANDIDATE] [tick {self.current_tick:4}] Starting election for term {self.term}")
 
         msg = RequestVote(
@@ -335,6 +353,7 @@ class TickNode:
             self.state = State.FOLLOWER
             self.voted_for = None
             self.votes_recvd = None
+            self._persist_state()
             if old_state != State.FOLLOWER:
                 print(f"[Node {self.id}] [{old_state.name:9}] Stepping down to FOLLOWER for term {new_term}")
             return True
@@ -373,6 +392,51 @@ class TickNode:
         for i in range(len(self.peers)):
             self._send_to_peer(msg, i)
 
+    # Persistence helpers
+
+    def _persist_state(self):
+        state = {
+            "term": self.term,
+            "voted_for": self.voted_for,
+            "log": [asdict(e) for e in self.log],
+            "commit_idx": self.commit_idx,
+            "last_applied": self.last_applied,
+        }
+
+        tmp_path = self.state_file.with_suffix(".tmp")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(state, f)
+                f.flush()
+                os.fsync(f.fileno())
+            tmp_path.replace(self.state_file)
+        except Exception as e:
+            print(f"[Node {self.id}] Failed to persist state to {self.state_file}: {e}")
+
+    def _load_persisted_state(self):
+        if not self.state_file.exists():
+            return
+
+        try:
+            with open(self.state_file, "r", encoding="utf-8") as f:
+                state = json.load(f)
+
+            self.term = state.get("term", self.term)
+            self.voted_for = state.get("voted_for", self.voted_for)
+            self.log = [LogEntry(**e) for e in state.get("log", [])]
+            self.commit_idx = state.get("commit_idx", self.commit_idx)
+            self.last_applied = state.get("last_applied", self.last_applied)
+
+            if self.log:
+                max_commit_idx = len(self.log) - 1
+                self.commit_idx = max(0, min(self.commit_idx, max_commit_idx))
+            else:
+                self.commit_idx = 0
+
+            print(f"[Node {self.id}] Restored persisted state from {self.state_file}")
+        except Exception as e:
+            print(f"[Node {self.id}] Failed to restore state from {self.state_file}: {e}")
+
     # Utilities
 
     def _reset_election_timer(self):
@@ -388,6 +452,7 @@ class TickNode:
 
         entry = LogEntry(data=data, term=self.term)
         self.log.append(entry)
+        self._persist_state()
         print(f"[Node {self.id}] [LEADER   ] Appended entry '{data}' to log at index {len(self.log) - 1}")
         return True
 

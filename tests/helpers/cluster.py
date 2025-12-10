@@ -5,10 +5,13 @@ This module provides helpers for managing clusters of Raft nodes:
 """
 
 import json
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
+from pathlib import Path
 from typing import Any
 
 from raft.messages import (
@@ -36,6 +39,7 @@ class MultiprocessCluster:
         self.n_nodes = n_nodes
         self.processes: dict[int, subprocess.Popen] = {}
         self.udp_ports = {i: base_udp_port + i for i in range(n_nodes)}
+        self.state_dir = Path(tempfile.mkdtemp(prefix="dinghy-raft-state-"))
 
         # Control socket for sending messages to nodes
         self.control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -67,6 +71,8 @@ class MultiprocessCluster:
             json.dumps(peers),
             "--peer-ids",
             json.dumps(peer_ids),
+            "--state-dir",
+            str(self.state_dir),
         ]
 
         if random_seed is not None:
@@ -193,6 +199,10 @@ class MultiprocessCluster:
         # Close control socket
         try:
             self.control_sock.close()
+        except Exception:
+            pass
+        try:
+            shutil.rmtree(self.state_dir)
         except Exception:
             pass
         print("[Cluster] All nodes stopped")
