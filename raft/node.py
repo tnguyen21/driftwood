@@ -125,6 +125,7 @@ class TickNode:
     def _handle_control_tick(self):
         """Process a tick: advance counter and check timeouts/heartbeats."""
         self.current_tick += 1
+        self._apply_committed_entries()
 
         # Debug: print every 50 ticks
         if self.current_tick % 50 == 0:
@@ -145,6 +146,12 @@ class TickNode:
             if self.current_tick % self.heartbeat_interval_ticks == 0:
                 self._send_heartbeats()
 
+    def _apply_committed_entries(self):
+        if self.commit_idx > self.last_applied:
+            # advance last_applied up to commit_idx; app logic would run here
+            self.last_applied = self.commit_idx
+            self._persist_state()
+
     def _handle_control_message(self, msg, addr: tuple[str, int]):
         match msg:
             case ControlQueryState():
@@ -155,6 +162,7 @@ class TickNode:
                     current_tick=self.current_tick,
                     commit_idx=self.commit_idx,
                     voted_for=self.voted_for,
+                    last_applied=self.last_applied,
                     log=[{"term": e.term, "data": e.data} for e in self.log],
                 )
                 self.sock.sendto(response.to_bytes(), addr)
@@ -430,8 +438,10 @@ class TickNode:
             if self.log:
                 max_commit_idx = len(self.log) - 1
                 self.commit_idx = max(0, min(self.commit_idx, max_commit_idx))
+                self.last_applied = max(0, min(self.last_applied, self.commit_idx))
             else:
                 self.commit_idx = 0
+                self.last_applied = 0
 
             print(f"[Node {self.id}] Restored persisted state from {self.state_file}")
         except Exception as e:

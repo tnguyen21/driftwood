@@ -143,6 +143,7 @@ class MultiprocessCluster:
                 "term": response.term,
                 "current_tick": response.current_tick,
                 "commit_idx": response.commit_idx,
+                "last_applied": response.last_applied,
                 "voted_for": response.voted_for,
                 "log": response.log,
             }
