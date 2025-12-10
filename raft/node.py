@@ -57,8 +57,8 @@ class TickNode:
         self.heartbeat_interval_ticks = 50  # send heartbeat every 50 ticks
 
         # Commit state
-        self.commit_idx = 0
-        self.last_applied = 0
+        self.commit_idx = -1
+        self.last_applied = -1
 
         # Leader state - keyed by peer_id
         self.next_idx: dict[int, int] = {}
@@ -249,6 +249,8 @@ class TickNode:
         if msg.term >= self.term:
             self._become_follower(msg.term)
 
+        self._reset_election_timer()
+
         if msg.last_log_index == -1 or (msg.last_log_index < len(self.log) and self.log[msg.last_log_index].term == msg.last_log_term):
             reply.success = True
 
@@ -273,11 +275,9 @@ class TickNode:
 
             if msg.leader_commit > self.commit_idx:
                 old_commit = self.commit_idx
-                self.commit_idx = min(msg.leader_commit, len(self.log) - 1)
+                self.commit_idx = min(msg.leader_commit, msg.last_log_index + len(entries))
                 print(f"[Node {self.id}] [{self.state.name:9}] Advanced commit_idx from {old_commit} to {self.commit_idx}")
                 state_changed = True
-
-            self._reset_election_timer()
 
         if state_changed:
             self._persist_state()
