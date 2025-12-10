@@ -16,6 +16,8 @@ all of the core raft logic lives in node.py
 
 messages.py just has type definitions
 
+be wary! there are probably still some subtle bugs lurking in this implementation! please submit an issue or pr if you have any questions or comments.
+
 ...
 
 start a node:
