@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--peer-ids", required=True, help="JSON list of peer IDs: [0, 1, 2, ...]")
     parser.add_argument("--addr", default="localhost", help="Address to bind UDP socket (default: localhost)")
     parser.add_argument("--random-seed", type=int, help="Random seed for deterministic behavior")
+    parser.add_argument("--state-dir", help="Directory for persisted Raft state (defaults to $RAFT_STATE_DIR or ./.raft_state)")
 
     args = parser.parse_args()
 
@@ -40,7 +41,7 @@ def main():
 
     peers = [tuple(peer) for peer in peers]
 
-    node = TickNode(id=args.id, peer_ids=peer_ids, random_seed=args.random_seed)
+    node = TickNode(id=args.id, peer_ids=peer_ids, random_seed=args.random_seed, state_dir=args.state_dir)
     node.start_udp(addr=args.addr, port=args.udp_port, peers=peers)
 
     print(f"[Node {args.id}] Started successfully")

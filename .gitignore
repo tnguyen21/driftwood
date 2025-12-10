@@ -62,6 +62,7 @@ coverage.xml
 logs.txt
 debug_*.py
 *.log
+.raft_state/
 
 # Temporary files
 *.tmp
