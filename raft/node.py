@@ -243,8 +243,11 @@ class TickNode:
             self._send_to_addr(reply, addr)
             return
 
-        if msg.term >= self.term:
+        if msg.term > self.term:
             self._become_follower(msg.term)
+        elif msg.term == self.term and self.state != State.FOLLOWER:
+            # we're a candidate and need to step down, but don't reset state the way _become_follower does
+            self.state = State.FOLLOWER
 
         self._reset_election_timer()
 
@@ -279,11 +282,14 @@ class TickNode:
         if state_changed:
             self._persist_state()
 
+        # _become_follower updates the node's term, so update the term we send in our reply below
+        reply.term = self.term
         self._send_to_addr(reply, addr)
 
     def _handle_append_entries_response(self, msg: AppendEntriesResponse, addr: tuple[str, int]):
-        if msg.term >= self.term:
+        if msg.term > self.term:
             self._become_follower(msg.term)
+            return
 
         # Log inconsistency - back up and retry
         if not msg.success:
@@ -292,8 +298,9 @@ class TickNode:
 
         if self.state == State.LEADER and self.term == msg.term:
             # Update replication state for this peer
-            self.match_idx[msg.sender_id] = msg.match_idx
-            self.next_idx[msg.sender_id] = msg.match_idx + 1
+            # TODO UDP reordering msgs may make the below buggy
+            self.match_idx[msg.sender_id] = max(self.match_idx[msg.sender_id], msg.match_idx)
+            self.next_idx[msg.sender_id] = max(self.next_idx[msg.sender_id], self.match_idx[msg.sender_id] + 1)
             print(f"[Node {self.id}] [LEADER   ] Peer {msg.sender_id} replicated up to index {msg.match_idx}")
 
             # Check if we can advance commit_idx
@@ -434,11 +441,11 @@ class TickNode:
 
             if self.log:
                 max_commit_idx = len(self.log) - 1
-                self.commit_idx = max(0, min(self.commit_idx, max_commit_idx))
-                self.last_applied = max(0, min(self.last_applied, self.commit_idx))
+                self.commit_idx = max(-1, min(self.commit_idx, max_commit_idx))
+                self.last_applied = max(-1, min(self.last_applied, self.commit_idx))
             else:
-                self.commit_idx = 0
-                self.last_applied = 0
+                self.commit_idx = -1
+                self.last_applied = -1
 
             print(f"[Node {self.id}] Restored persisted state from {self.state_file}")
         except Exception as e:
