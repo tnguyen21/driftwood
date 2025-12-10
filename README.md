@@ -1,6 +1,6 @@
 driftwood (a poor man's broken Raft)
 
----
+...
 
 a single-threaded, toy implementation of the [raft consensus algorithm](https://raft.github.io/). written to better my understanding.
 
@@ -10,27 +10,26 @@ raft is complex enough! let's not add more ways we can get confused and introduc
 
 this isn't intended to be a performant or particularly complete implementation of raft. rather, it hopes to demonstrate enough of the core mechanics of the algorithm that it's correct under reasonable conditions and the less pathological error scenarios.
 
----
+...
 
-election.py demonstrates the leader election algorithm. running it produces the following logs:
+all of the core raft logic lives in node.py
+
+messages.py just has type definitions
+
+...
+
+start a node:
 
 ```
-Node 1: Starting election for term 1
-node 0: recv from ('127.0.0.1', 10001): b'{"type": "request_vote", "term": 1, "candidate_id": 1, "last_log_index": 0, "last_log_term": 0}'
-node 2: recv from ('127.0.0.1', 10001): b'{"type": "request_vote", "term": 1, "candidate_id": 1, "last_log_index": 0, "last_log_term": 0}'
-node 1: recv from ('127.0.0.1', 10000): b'{"type": "vote_response", "term": 1, "vote_granted": true}'
-node 1 became LEADER with 2 votes
-node 1: recv from ('127.0.0.1', 10002): b'{"type": "vote_response", "term": 1, "vote_granted": true}'
-node 0: recv from ('127.0.0.1', 10001): b'{"type": "heartbeat", "term": 1}'
-node 2: recv from ('127.0.0.1', 10001): b'{"type": "heartbeat", "term": 1}'
-node 0: recv from ('127.0.0.1', 10001): b'{"type": "heartbeat", "term": 1}'
-node 2: recv from ('127.0.0.1', 10001): b'{"type": "heartbeat", "term": 1}'
+# this is in a single process
+# you should start nodes in separate processes and specify peer lists
+python -m raft.cli \
+        --id 0 \
+        --udp-port 10000 \
+        --peers '[["localhost", 10001], ["localhost", 10002]]' \
+        --peer-ids '[1, 2]'
 ```
 
----
+run tests:
 
-raft.py implements what the paper refers to as "`AppendEntries` messages" -- the core part of the algorithm that lets us replicate data across nodes in a safe, consistent manner.
-
-it include's some simple tests that starts up the node, sends in data, and confirms the replication and consistency of the log (even if a node fails).
-
-`uv run pytest tests/test_integration_basic.py -v -s`
+`uv run pytest tests -v -s`
