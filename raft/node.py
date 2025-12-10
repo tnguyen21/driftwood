@@ -235,9 +235,6 @@ class TickNode:
             if self.votes_recvd >= (total_nodes // 2 + 1):
                 self._become_leader()
 
-            # Only refresh election timer when we actually make progress as candidate
-            self._reset_election_timer()
-
     def _handle_append_entries(self, msg: AppendEntries, addr: tuple[str, int]):
         reply = AppendEntriesResponse(sender_id=self.id, term=self.term, success=False)
         state_changed = False
