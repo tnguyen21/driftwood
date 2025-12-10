@@ -1,14 +1,13 @@
+from pathlib import Path
+
+from raft.messages import LogEntry
+from raft.node import TickNode
 from tests.helpers.assertions import (
     assert_commit_index,
     assert_log_replicated,
     wait_for_leader,
     wait_for_log_replication,
 )
-
-from pathlib import Path
-
-from raft.node import TickNode
-from raft.messages import LogEntry
 
 
 def test_persist_and_restore_state(tmp_path: Path):
@@ -34,6 +33,17 @@ def test_persist_and_restore_state(tmp_path: Path):
 
     persisted_file = state_dir / "node_7.json"
     assert persisted_file.exists(), "State file was not created"
+
+
+def test_last_applied_advances(tmp_path: Path):
+    state_dir = tmp_path / "raft-state2"
+    node = TickNode(id=3, peer_ids=[], random_seed=1, state_dir=state_dir)
+
+    node.commit_idx = 4
+    node.last_applied = 2
+    node._apply_committed_entries()
+
+    assert node.last_applied == 4, "last_applied should catch up to commit_idx"
 
 
 def test_leader_restart_recovers_log(cluster_3):
@@ -63,3 +73,8 @@ def test_leader_restart_recovers_log(cluster_3):
     assert wait_for_log_replication(cluster_3, expected_length=2, timeout_ticks=500)
     cluster_3.tick_cluster(n_ticks=200)
     assert_commit_index(cluster_3, min_commit_idx=1)
+
+    for node_id in range(cluster_3.n_nodes):
+        state = cluster_3.get_node_state(node_id)
+        if state:
+            assert state["last_applied"] >= state["commit_idx"]

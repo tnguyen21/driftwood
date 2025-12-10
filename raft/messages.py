@@ -84,6 +84,7 @@ class ControlStateResponse(Message):
     current_tick: int = 0
     commit_idx: int = 0
     voted_for: int | None = None
+    last_applied: int = 0
     log: list[dict[str, Any]] = field(default_factory=list)
 
 
